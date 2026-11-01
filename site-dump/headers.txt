@@ -5,13 +5,13 @@ X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
 Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: camera=(), microphone=(), geolocation=()
-set-cookie: DLSESSID363fc3f8f3b785e4=df346ms9bgu6n0j585p68ndr5e; expires=Mon, 01-Nov-2027 10:31:04 GMT; Max-Age=31536000; path=/gdgaminglist; HttpOnly; SameSite=Lax
+set-cookie: DLSESSID363fc3f8f3b785e4=58606aqbrejn1vtc3nq81qch9q; expires=Mon, 01-Nov-2027 10:32:04 GMT; Max-Age=31536000; path=/gdgaminglist; HttpOnly; SameSite=Lax
 Expires: Thu, 19 Nov 1981 08:52:00 GMT
 Cache-Control: no-store, no-cache, must-revalidate
 Pragma: no-cache
 Content-Type: text/html; charset=UTF-8
 Transfer-Encoding: chunked
-Date: Sun, 01 Nov 2026 10:31:04 GMT
+Date: Sun, 01 Nov 2026 10:32:04 GMT
 Server: LiteSpeed
 Vary: User-Agent
 
