@@ -8,6 +8,9 @@
 	"name": "GD Gaming List",
 	"version": "v1.0.0",
 	"developer": "Pester",
-	"description": "Browse the GD Gaming List (gdgl.x10.mx) right inside GD, from a button on the Search screen.",
-	"tags": ["online", "interface"]
+	"description": "Official GD Gaming List mod: browse the list right inside GD, from a button on the Search screen.",
+	"tags": [
+		"online",
+		"interface"
+	]
 }

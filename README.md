@@ -1,6 +1,6 @@
 # GD Gaming List (Geode mod)
 
-Browse the GD Gaming List (gdgl.x10.mx) inside Geometry Dash 2.2081 (Geode 5.11.2).
+Official mod for the GD Gaming List (gdgl.x10.mx): browse the list inside Geometry Dash 2.2081 (Geode 5.11.2).
 
 ## Download
 Every push builds the mod on GitHub Actions and publishes it here:
