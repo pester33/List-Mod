@@ -6,11 +6,19 @@
 	},
 	"id": "pester.gdgl-list",
 	"name": "GD Gaming List",
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"developer": "Pester",
 	"description": "Official GD Gaming List mod: browse the list right inside GD, from a button on the Search screen.",
 	"tags": [
 		"online",
 		"interface"
-	]
+	],
+	"settings": {
+		"check-updates": {
+			"type": "bool",
+			"name": "Check for Updates",
+			"description": "When GD starts, check for a new version of this mod and offer to install it.",
+			"default": true
+		}
+	}
 }

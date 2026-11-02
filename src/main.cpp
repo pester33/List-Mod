@@ -1,5 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/LevelSearchLayer.hpp>
+#include <Geode/modify/MenuLayer.hpp>
+#include <Geode/ui/TextInput.hpp>
 #include <Geode/utils/web.hpp>
 #include <Geode/utils/async.hpp>
 
@@ -19,6 +21,11 @@ struct ListLevel {
     std::string bucket; // "main", "extended", ...
     std::string levelID;
 };
+
+static std::string lower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
 
 static std::string capitalize(std::string s) {
     if (!s.empty()) s[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
@@ -63,9 +70,10 @@ static Result<std::vector<ListLevel>> parseListPage(std::string const& html) {
 class GdglListPopup : public Popup {
 protected:
     static constexpr float WIDTH = 400.f;
-    static constexpr float HEIGHT = 270.f;
+    static constexpr float HEIGHT = 290.f;
     static constexpr float LIST_W = 360.f;
-    static constexpr float LIST_H = 195.f;
+    static constexpr float LIST_H = 168.f;
+    static constexpr float LIST_Y = 116.f; // centre of the list
     static constexpr float ROW_H = 34.f;
 
     ScrollLayer* m_list = nullptr;
@@ -73,6 +81,8 @@ protected:
     CCMenu* m_tabMenu = nullptr;
     std::vector<ListLevel> m_levels;
     std::string m_filter = "all";
+    std::string m_search;
+    TextInput* m_searchInput = nullptr;
     async::TaskHolder<web::WebResponse> m_task;
 
     bool init() {
@@ -85,17 +95,17 @@ protected:
         bg->setColor({ 0, 0, 0 });
         bg->setOpacity(80);
         bg->setContentSize({ LIST_W + 6.f, LIST_H + 6.f });
-        bg->setPosition({ center.width, center.height - 16.f });
+        bg->setPosition({ center.width, LIST_Y });
         m_mainLayer->addChild(bg);
 
         m_list = ScrollLayer::create({ LIST_W, LIST_H });
-        m_list->setPosition({ center.width - LIST_W / 2, center.height - 16.f - LIST_H / 2 });
+        m_list->setPosition({ center.width - LIST_W / 2, LIST_Y - LIST_H / 2 });
         m_list->m_contentLayer->setLayout(ScrollLayer::createDefaultListLayout(3.f));
         m_mainLayer->addChild(m_list);
 
         m_status = CCLabelBMFont::create("Loading...", "bigFont.fnt");
         m_status->setScale(0.5f);
-        m_status->setPosition({ center.width, center.height - 16.f });
+        m_status->setPosition({ center.width, LIST_Y });
         m_mainLayer->addChild(m_status, 5);
 
         // Tabs get built once we know which sections the list has (Main, Extended, Legacy...)
@@ -105,6 +115,16 @@ protected:
         m_tabMenu->ignoreAnchorPointForPosition(false);
         m_tabMenu->setLayout(RowLayout::create()->setGap(6.f));
         m_mainLayer->addChild(m_tabMenu);
+
+        // Search bar: filters by level name, creator, publisher or verifier as you type
+        m_searchInput = TextInput::create(LIST_W - 10.f, "Search levels...", "bigFont.fnt");
+        m_searchInput->setPosition({ center.width, HEIGHT - 74.f });
+        m_searchInput->setScale(0.85f);
+        m_searchInput->setCallback([this](std::string const& text) {
+            m_search = lower(text);
+            this->rebuild();
+        });
+        m_mainLayer->addChild(m_searchInput);
 
         auto webSpr = ButtonSprite::create("Website", "goldFont.fnt", "GJ_button_01.png", 0.8f);
         webSpr->setScale(0.55f);
@@ -178,11 +198,17 @@ protected:
         int shown = 0;
         for (auto& lvl : m_levels) {
             if (m_filter != "all" && lvl.bucket != m_filter) continue;
+            if (!m_search.empty()
+                && lower(lvl.name).find(m_search) == std::string::npos
+                && lower(lvl.byline).find(m_search) == std::string::npos
+                && fmt::format("#{}", lvl.position) != m_search
+                && std::to_string(lvl.position) != m_search) continue;
             content->addChild(this->createRow(lvl));
             shown++;
         }
 
         if (m_levels.empty()) m_status->setString("The list is empty.");
+        else if (shown == 0 && !m_search.empty()) m_status->setString("No levels match your search.");
         else if (shown == 0) m_status->setString("No levels here.");
         m_status->setVisible(shown == 0);
 
@@ -284,6 +310,85 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
         btn->setPosition({ 52.f, winSize.height / 2.f - 52.f });
         this->addChild(menu, 10);
 
+        return true;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Self-updater: checks GitHub for a newer build when GD starts
+// ---------------------------------------------------------------------------
+
+static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build/";
+
+static async::TaskHolder<web::WebResponse> s_updateTask;
+
+static void installUpdate(std::string version) {
+    auto loading = Notification::create("Downloading GD Gaming List update...", NotificationIcon::Loading, 0.f);
+    loading->show();
+
+    web::WebRequest req;
+    req.timeout(std::chrono::seconds(60));
+    s_updateTask.spawn(
+        req.get(fmt::format("{}{}.geode", RELEASE_BASE, Mod::get()->getID())),
+        [loading = Ref(loading), version](web::WebResponse res) {
+            loading->hide();
+            auto const& data = res.data();
+            // A .geode file is a zip: must start with "PK"
+            if (!res.ok() || data.size() < 4 || data[0] != 'P' || data[1] != 'K') {
+                log::warn("Update download failed: HTTP {}", res.code());
+                Notification::create("Update failed to download", NotificationIcon::Error)->show();
+                return;
+            }
+            // Replace our own .geode file; Geode loads the new one on the next start
+            auto written = file::writeBinarySafe(Mod::get()->getPackagePath(), data);
+            if (!written) {
+                log::warn("Update install failed: {}", written.unwrapErr());
+                Notification::create("Update failed to install", NotificationIcon::Error)->show();
+                return;
+            }
+            createQuickPopup(
+                "Update installed",
+                fmt::format("GD Gaming List <cg>{}</c> is installed. Restart GD to use it.", version),
+                "Later", "Restart",
+                [](auto, bool restart) {
+                    if (restart) game::restart(true);
+                }
+            );
+        }
+    );
+}
+
+static void checkForUpdate() {
+    web::WebRequest req;
+    req.timeout(std::chrono::seconds(15));
+    s_updateTask.spawn(req.get(fmt::format("{}version.txt", RELEASE_BASE)), [](web::WebResponse res) {
+        if (!res.ok()) return;
+        auto text = utils::string::trim(res.string().unwrapOr(""));
+        auto latest = VersionInfo::parse(text);
+        if (!latest) return;
+        auto current = Mod::get()->getVersion();
+        if (!(latest.unwrap() > current)) return;
+
+        auto version = latest.unwrap().toVString();
+        createQuickPopup(
+            "GD Gaming List",
+            fmt::format("A new version is out: <cg>{}</c> (you have {}).\nUpdate now?", version, current.toVString()),
+            "Later", "Update",
+            [version](auto, bool update) {
+                if (update) installUpdate(version);
+            }
+        );
+    });
+}
+
+class $modify(GdglMenuLayer, MenuLayer) {
+    bool init() {
+        if (!MenuLayer::init()) return false;
+        static bool checked = false;
+        if (!checked && Mod::get()->getSettingValue<bool>("check-updates")) {
+            checked = true;
+            checkForUpdate();
+        }
         return true;
     }
 };

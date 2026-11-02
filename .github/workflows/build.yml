@@ -51,10 +51,19 @@ jobs:
           name: Build Output
           path: ${{ steps.build.outputs.build-output }}
 
+      - uses: actions/checkout@v4
+        with:
+          path: src-repo
+
+      - name: Write version.txt (used by the in-game updater)
+        run: jq -r '.version' src-repo/mod.json > "${{ steps.build.outputs.build-output }}/version.txt"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-build
           name: GD Gaming List mod (latest build)
           make_latest: true
-          files: ${{ steps.build.outputs.build-output }}/*.geode
+          files: |
+            ${{ steps.build.outputs.build-output }}/*.geode
+            ${{ steps.build.outputs.build-output }}/version.txt
