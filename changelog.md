@@ -1,3 +1,6 @@
+# v1.3.3
+- When an update is out, a green Update button now also shows in the list header (besides the popup when GD starts)
+
 # v1.3.2
 - Fixed the update popup not showing: the check now retries, waits for the menu to finish loading, and writes what it does to the Geode log
 - New Updates button in the list to check for updates any time

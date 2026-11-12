@@ -21,7 +21,20 @@ static constexpr auto DATA_END = "</script>";
 // Used when the site can't be reached or sends back a different page (some networks do that).
 static constexpr auto MIRROR_URL = "https://raw.githubusercontent.com/pester33/List-Mod/main/data/levels.json";
 
+// Each GD version has its own release, so the updater never installs a build for the wrong GD version
+#if GEODE_COMP_GD_VERSION >= 22091
+static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build-2.2091/";
+#else
+static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build/";
+#endif
+
+// Newest version seen on GitHub this session (filled by any update check)
+static std::optional<VersionInfo> s_latestKnown;
+// Set once an update was downloaded this session (it loads after a restart)
+static bool s_updateInstalled = false;
+
 static void checkForUpdate(bool manual, bool isRetry);
+static void installUpdate(std::string version);
 
 // ---------------------------------------------------------------------------
 // Colours
@@ -420,6 +433,8 @@ protected:
     bool m_favOnly = false;
     bool m_fromBackup = false;
     async::TaskHolder<web::WebResponse> m_task;
+    async::TaskHolder<web::WebResponse> m_updateCheck;
+    CCMenuItemSpriteExtra* m_updateBtn = nullptr;
 
     bool init() {
         if (!Popup::init(W, H)) return false;
@@ -519,7 +534,50 @@ protected:
         m_buttonMenu->addChild(updates);
 
         this->load();
+        this->checkUpdateButton();
         return true;
+    }
+
+    // ----- Update button in the header (second way to update, besides the popup on game start)
+
+    void checkUpdateButton() {
+        if (s_updateInstalled) return;
+        auto current = Mod::get()->getVersion();
+        if (s_latestKnown) {
+            if (*s_latestKnown > current) this->showUpdateButton(s_latestKnown->toVString());
+            return;
+        }
+        // The check on game start hasn't finished (or failed): ask GitHub quietly
+        web::WebRequest req;
+        req.timeout(std::chrono::seconds(20));
+        m_updateCheck.spawn(req.get(fmt::format("{}version.txt", RELEASE_BASE)), [this](web::WebResponse res) {
+            if (!res.ok()) {
+                log::info("[updater] Popup check failed: HTTP {}", res.code());
+                return;
+            }
+            auto latest = VersionInfo::parse(utils::string::trim(res.string().unwrapOr("")));
+            if (!latest) return;
+            s_latestKnown = latest.unwrap();
+            if (latest.unwrap() > Mod::get()->getVersion()) this->showUpdateButton(latest.unwrap().toVString());
+        });
+    }
+
+    void showUpdateButton(std::string version) {
+        if (m_updateBtn) return;
+        auto spr = ButtonSprite::create(fmt::format("Update {}", version).c_str(), "goldFont.fnt", "GJ_button_01.png", 0.8f);
+        spr->setScale(0.5f);
+        m_updateBtn = CCMenuItemExt::createSpriteExtra(spr, [version](CCMenuItemSpriteExtra*) {
+            createQuickPopup(
+                "GD Gaming List",
+                fmt::format("Update to <cg>{}</c> now? (you have {})", version, Mod::get()->getVersion().toVString()),
+                "Later", "Update",
+                [version](auto, bool update) {
+                    if (update) installUpdate(version);
+                }
+            );
+        });
+        m_updateBtn->setPosition({ W - 140.f, H - 28.f });
+        m_buttonMenu->addChild(m_updateBtn);
     }
 
     // ----- Loading
@@ -829,12 +887,6 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
 // Self-updater: checks GitHub for a newer build when GD starts (or when asked)
 // ---------------------------------------------------------------------------
 
-// Each GD version has its own release, so the updater never installs a build for the wrong GD version
-#if GEODE_COMP_GD_VERSION >= 22091
-static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build-2.2091/";
-#else
-static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build/";
-#endif
 
 static async::TaskHolder<web::WebResponse> s_updateTask;
 static bool s_updateBusy = false;
@@ -854,6 +906,11 @@ static void whenScreenReady(std::function<void()> fn, int tries = 0) {
 
 static void installUpdate(std::string version) {
     if (s_updateBusy) return;
+    if (s_updateInstalled) {
+        createQuickPopup("Update installed", "The update is already installed.\nRestart GD to use it.", "Later", "Restart",
+            [](auto, bool restart) { if (restart) game::restart(true); });
+        return;
+    }
     s_updateBusy = true;
 
     auto url = fmt::format("{}{}.geode", RELEASE_BASE, Mod::get()->getID());
@@ -882,6 +939,7 @@ static void installUpdate(std::string version) {
             return;
         }
         log::info("[updater] Installed {}", version);
+        s_updateInstalled = true;
         whenScreenReady([version] {
             createQuickPopup(
                 "Update installed",
@@ -930,6 +988,7 @@ static void checkForUpdate(bool manual, bool isRetry) {
             if (manual) Notification::create("Couldn't read the latest version", NotificationIcon::Error, 3.f)->show();
             return;
         }
+        s_latestKnown = latest.unwrap();
         auto current = Mod::get()->getVersion();
         auto version = latest.unwrap().toVString();
         if (!(latest.unwrap() > current)) {
