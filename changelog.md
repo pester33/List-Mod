@@ -1,3 +1,10 @@
+# v1.3.0
+- New look: header with level count, gold/silver/bronze medals for the top 3, EXT tags, section counts on the tabs
+- Tap a level to open its details: publisher, verifier, Level ID (with Copy), points, video thumbnail, Play, Video and On site buttons
+- Favorites: favorite levels from their details and show only favorites with the star button
+- Random button picks a random level
+- Bottom bar shows if the list is live from the website or from the backup copy
+
 # v1.2.0
 - Now for GD 2.2091 (needs Geode 6)
 - Fixed "Couldn't read the list" for players whose network blocks or changes the website: the mod now falls back to a backup copy of the list

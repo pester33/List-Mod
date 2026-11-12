@@ -2,14 +2,18 @@
 #include <Geode/modify/LevelSearchLayer.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 #include <Geode/ui/TextInput.hpp>
+#include <Geode/ui/LazySprite.hpp>
+#include <Geode/ui/BasedButtonSprite.hpp>
 #include <Geode/utils/web.hpp>
 #include <Geode/utils/async.hpp>
+#include <Geode/utils/random.hpp>
 
 using namespace geode::prelude;
 
 // The list site embeds its full level list as JSON on the Roulette page:
 // <script id="roulette-data" type="application/json">[ ... ]</script>
 static constexpr auto LIST_SITE = "http://gdgl.x10.mx/gdgaminglist/";
+static constexpr auto SITE_ROOT = "http://gdgl.x10.mx";
 static constexpr auto DATA_PAGE = "http://gdgl.x10.mx/gdgaminglist/roulette";
 static constexpr auto DATA_MARKER = "id=\"roulette-data\"";
 static constexpr auto DATA_END = "</script>";
@@ -17,12 +21,42 @@ static constexpr auto DATA_END = "</script>";
 // Used when the site can't be reached or sends back a different page (some networks do that).
 static constexpr auto MIRROR_URL = "https://raw.githubusercontent.com/pester33/List-Mod/main/data/levels.json";
 
+// ---------------------------------------------------------------------------
+// Colours
+// ---------------------------------------------------------------------------
+
+static constexpr ccColor3B COL_DARK = { 61, 34, 14 };      // header / bars
+static constexpr ccColor3B COL_FIELD = { 42, 23, 8 };      // search box / info box
+static constexpr ccColor3B COL_MAIN = { 122, 69, 32 };     // main list rows
+static constexpr ccColor3B COL_EXT = { 59, 91, 150 };      // extended list rows
+static constexpr ccColor3B COL_GOLD = { 255, 210, 63 };
+static constexpr ccColor3B COL_SILVER = { 207, 214, 222 };
+static constexpr ccColor3B COL_BRONZE = { 216, 137, 74 };
+static constexpr ccColor3B COL_MUTED = { 217, 194, 163 };
+static constexpr ccColor3B COL_LABEL = { 201, 176, 138 };
+
+static ccColor4F toColor4F(ccColor3B c, float a = 1.f) {
+    return { c.r / 255.f, c.g / 255.f, c.b / 255.f, a };
+}
+
+// ---------------------------------------------------------------------------
+// Data
+// ---------------------------------------------------------------------------
+
 struct ListLevel {
+    int siteID = 0;
     int position = 0;
     std::string name;
+    std::string creator;
+    std::string publishedBy;
+    std::string verifiedBy;
     std::string byline;
     std::string bucket; // "main", "extended", ...
     std::string levelID;
+    std::string videoUrl;
+    std::string thumbUrl;
+    std::string pageUrl;
+    std::string score;
 };
 
 static std::string lower(std::string s) {
@@ -35,6 +69,46 @@ static std::string capitalize(std::string s) {
     return s;
 }
 
+// "40.00" -> "40", "12.50" -> "12.5"
+static std::string tidyNumber(std::string n) {
+    if (n.find('.') != std::string::npos) {
+        while (!n.empty() && n.back() == '0') n.pop_back();
+        if (!n.empty() && n.back() == '.') n.pop_back();
+    }
+    return n;
+}
+
+// "40.00 (68%) - 400.00 (100%) points" -> "400 max, 40 at 68%"
+static std::string formatScore(std::string const& score) {
+    auto dash = score.find(" - ");
+    if (dash == std::string::npos) return score;
+    auto minPart = score.substr(0, dash);
+    auto maxPart = score.substr(dash + 3);
+    auto minNum = tidyNumber(minPart.substr(0, minPart.find(' ')));
+    auto maxNum = tidyNumber(maxPart.substr(0, maxPart.find(' ')));
+    auto open = minPart.find('(');
+    auto close = minPart.find(')');
+    if (open == std::string::npos || close == std::string::npos || maxNum.empty()) return score;
+    auto minPercent = minPart.substr(open + 1, close - open - 1);
+    return fmt::format("{} max, {} at {}", maxNum, minNum, minPercent);
+}
+
+// "published by A, verified by B" -> A, B
+static void splitByline(ListLevel& lvl) {
+    auto const& b = lvl.byline;
+    constexpr std::string_view PUB = "published by ";
+    constexpr std::string_view VER = "verified by ";
+    auto pub = b.find(PUB);
+    auto ver = b.find(VER);
+    if (pub != std::string::npos) {
+        auto start = pub + PUB.size();
+        auto end = ver != std::string::npos ? b.rfind(',', ver) : std::string::npos;
+        lvl.publishedBy = b.substr(start, end == std::string::npos || end < start ? std::string::npos : end - start);
+    }
+    if (ver != std::string::npos) lvl.verifiedBy = b.substr(ver + VER.size());
+    if (lvl.publishedBy.empty()) lvl.publishedBy = lvl.creator;
+}
+
 // Turns the list JSON (an array of levels) into levels
 static Result<std::vector<ListLevel>> parseLevels(std::string_view text) {
     auto parsed = matjson::parse(text);
@@ -42,22 +116,32 @@ static Result<std::vector<ListLevel>> parseLevels(std::string_view text) {
     auto json = std::move(parsed).unwrap();
     if (!json.isArray() || json.size() == 0) return Err("List data is empty");
 
+    auto str = [](matjson::Value const& v) -> std::string {
+        if (v.isString()) return v.asString().unwrapOr("");
+        if (v.isNumber()) return std::to_string(v.asInt().unwrapOr(0));
+        return "";
+    };
+
     std::vector<ListLevel> levels;
     for (auto& entry : json) {
         if (!entry["shown"].asBool().unwrapOr(true)) continue;
         ListLevel lvl;
+        lvl.siteID = static_cast<int>(entry["id"].asInt().unwrapOr(0));
         lvl.position = static_cast<int>(entry["position"].asInt().unwrapOr(0));
-        lvl.name = entry["name"].asString().unwrapOr("Unknown");
-        lvl.byline = entry["byline"].asString().unwrapOr("");
-        if (lvl.byline.empty()) {
-            auto creator = entry["creator"].asString().unwrapOr("");
-            if (!creator.empty()) lvl.byline = "by " + creator;
-        }
-        lvl.bucket = entry["bucket"].asString().unwrapOr("main");
-        auto& id = entry["levelId"];
-        if (id.isString()) lvl.levelID = id.asString().unwrapOr("");
-        else if (id.isNumber()) lvl.levelID = std::to_string(id.asInt().unwrapOr(0));
+        lvl.name = str(entry["name"]);
+        if (lvl.name.empty()) lvl.name = "Unknown";
+        lvl.creator = str(entry["creator"]);
+        lvl.byline = str(entry["byline"]);
+        if (lvl.byline.empty() && !lvl.creator.empty()) lvl.byline = "by " + lvl.creator;
+        lvl.bucket = str(entry["bucket"]);
+        if (lvl.bucket.empty()) lvl.bucket = "main";
+        lvl.levelID = str(entry["levelId"]);
         if (lvl.levelID == "0") lvl.levelID.clear();
+        lvl.videoUrl = str(entry["videoUrl"]);
+        lvl.thumbUrl = str(entry["thumb"]);
+        lvl.pageUrl = str(entry["url"]);
+        lvl.score = str(entry["score"]);
+        splitByline(lvl);
         levels.push_back(std::move(lvl));
     }
     std::stable_sort(levels.begin(), levels.end(), [](auto const& a, auto const& b) {
@@ -78,91 +162,383 @@ static Result<std::vector<ListLevel>> parseListPage(std::string const& html) {
     return parseLevels(std::string_view(html).substr(start, end - start));
 }
 
+// ---------------------------------------------------------------------------
+// Favourites (saved per level, by the site's own level id)
+// ---------------------------------------------------------------------------
+
+static std::string favKey(ListLevel const& lvl) {
+    return lvl.siteID > 0 ? fmt::format("fav-{}", lvl.siteID) : "fav-name-" + lower(lvl.name);
+}
+static bool isFavorite(ListLevel const& lvl) {
+    return Mod::get()->getSavedValue<bool>(favKey(lvl), false);
+}
+static void setFavorite(ListLevel const& lvl, bool fav) {
+    Mod::get()->setSavedValue<bool>(favKey(lvl), fav);
+}
+
+// ---------------------------------------------------------------------------
+// Small UI helpers
+// ---------------------------------------------------------------------------
+
+static CCScale9Sprite* panel(CCSize size, ccColor3B color, GLubyte opacity = 255) {
+    auto spr = CCScale9Sprite::create("square02b_001.png");
+    spr->setColor(color);
+    spr->setOpacity(opacity);
+    spr->setContentSize(size);
+    return spr;
+}
+
+// Coloured circle with a number in it (gold / silver / bronze for the top 3)
+static CCNode* rankBadge(ListLevel const& lvl, float radius) {
+    ccColor3B fill = lvl.bucket == "extended" ? ccColor3B{ 36, 64, 111 } : ccColor3B{ 74, 40, 16 };
+    ccColor3B text = { 255, 255, 255 };
+    if (lvl.bucket == "main" && lvl.position == 1) { fill = COL_GOLD; text = { 61, 34, 14 }; }
+    if (lvl.bucket == "main" && lvl.position == 2) { fill = COL_SILVER; text = { 44, 44, 42 }; }
+    if (lvl.bucket == "main" && lvl.position == 3) { fill = COL_BRONZE; text = { 61, 34, 14 }; }
+
+    auto node = CCNode::create();
+    node->setContentSize({ radius * 2, radius * 2 });
+    node->setAnchorPoint({ 0.5f, 0.5f });
+
+    auto dot = CCDrawNode::create();
+    dot->drawDot({ radius, radius }, radius, toColor4F(fill));
+    node->addChild(dot);
+
+    auto label = CCLabelBMFont::create(std::to_string(lvl.position).c_str(), "bigFont.fnt");
+    label->limitLabelWidth(radius * 1.5f, radius / 26.f, 0.1f);
+    label->setColor(text);
+    label->setPosition({ radius, radius });
+    node->addChild(label);
+    return node;
+}
+
+static CCNode* playSprite(float scale) {
+    if (auto spr = CCSprite::createWithSpriteFrameName("GJ_playBtn2_001.png")) {
+        spr->setScale(scale);
+        return spr;
+    }
+    auto btn = ButtonSprite::create("Play", "bigFont.fnt", "GJ_button_01.png", 0.8f);
+    btn->setScale(0.45f);
+    return btn;
+}
+
+static void openLevel(std::string const& id) {
+    auto search = GJSearchObject::create(SearchType::Search, id);
+    auto scene = LevelBrowserLayer::scene(search);
+    CCDirector::sharedDirector()->pushScene(CCTransitionFade::create(0.5f, scene));
+}
+
+static CCMenuItemSpriteExtra* textButton(
+    char const* text, char const* texture, float scale, std::function<void()> onClick, char const* font = "goldFont.fnt"
+) {
+    auto spr = ButtonSprite::create(text, font, texture, 0.8f);
+    spr->setScale(scale);
+    return CCMenuItemExt::createSpriteExtra(spr, [onClick](CCMenuItemSpriteExtra*) { onClick(); });
+}
+
+// ---------------------------------------------------------------------------
+// Level details popup
+// ---------------------------------------------------------------------------
+
+class GdglLevelPopup : public Popup {
+protected:
+    static constexpr float W = 320.f;
+    static constexpr float H = 262.f;
+
+    ListLevel m_level;
+    std::function<void()> m_onFavoriteChanged;
+    CCMenuItemSpriteExtra* m_favBtn = nullptr;
+
+    bool init(ListLevel level, std::function<void()> onFavoriteChanged) {
+        if (!Popup::init(W, H)) return false;
+        m_level = std::move(level);
+        m_onFavoriteChanged = std::move(onFavoriteChanged);
+        auto const& lvl = m_level;
+
+        // Header bar
+        auto header = panel({ W - 16.f, 26.f }, COL_DARK);
+        header->setPosition({ W / 2, H - 21.f });
+        m_mainLayer->addChild(header);
+        auto headerLbl = CCLabelBMFont::create("Level details", "chatFont.fnt");
+        headerLbl->setScale(0.6f);
+        headerLbl->setColor(COL_MUTED);
+        headerLbl->setPosition({ W / 2, H - 21.f });
+        m_mainLayer->addChild(headerLbl);
+
+        // Rank + name + section
+        auto badge = rankBadge(lvl, 18.f);
+        badge->setPosition({ 34.f, H - 64.f });
+        m_mainLayer->addChild(badge);
+
+        bool hasThumb = !lvl.thumbUrl.empty();
+        float nameWidth = hasThumb ? 150.f : 240.f;
+
+        auto name = CCLabelBMFont::create(lvl.name.c_str(), "goldFont.fnt");
+        name->setAnchorPoint({ 0.f, 0.5f });
+        name->limitLabelWidth(nameWidth, 0.75f, 0.2f);
+        name->setPosition({ 60.f, H - 57.f });
+        m_mainLayer->addChild(name);
+
+        auto section = CCLabelBMFont::create(fmt::format("{} list  #{}", capitalize(lvl.bucket), lvl.position).c_str(), "chatFont.fnt");
+        section->setAnchorPoint({ 0.f, 0.5f });
+        section->setScale(0.55f);
+        section->setColor(COL_MUTED);
+        section->setPosition({ 61.f, H - 75.f });
+        m_mainLayer->addChild(section);
+
+        // Video thumbnail from YouTube
+        if (hasThumb) {
+            auto thumb = LazySprite::create({ 80.f, 45.f });
+            thumb->setAutoResize(true);
+            thumb->setPosition({ W - 54.f, H - 64.f });
+            thumb->loadFromUrl(lvl.thumbUrl);
+            m_mainLayer->addChild(thumb);
+        }
+
+        // Info box
+        float boxH = 88.f;
+        float boxTop = H - 92.f;
+        auto box = panel({ W - 40.f, boxH }, COL_FIELD);
+        box->setPosition({ W / 2, boxTop - boxH / 2 });
+        m_mainLayer->addChild(box);
+
+        std::vector<std::pair<std::string, std::string>> rows = {
+            { "Published by", lvl.publishedBy.empty() ? "-" : lvl.publishedBy },
+            { "Verified by", lvl.verifiedBy.empty() ? "-" : lvl.verifiedBy },
+            { "Level ID", lvl.levelID.empty() ? "Not added yet" : lvl.levelID },
+            { "Points", lvl.score.empty() ? "-" : formatScore(lvl.score) },
+        };
+        float rowY = boxTop - 13.f;
+        for (auto& [label, value] : rows) {
+            auto l = CCLabelBMFont::create(label.c_str(), "chatFont.fnt");
+            l->setAnchorPoint({ 0.f, 0.5f });
+            l->setScale(0.6f);
+            l->setColor(COL_LABEL);
+            l->setPosition({ 30.f, rowY });
+            m_mainLayer->addChild(l);
+
+            bool isID = label == "Level ID" && !lvl.levelID.empty();
+            auto v = CCLabelBMFont::create(value.c_str(), "chatFont.fnt");
+            v->setAnchorPoint({ 1.f, 0.5f });
+            v->limitLabelWidth(170.f, 0.6f, 0.2f);
+            v->setPosition({ W - (isID ? 62.f : 30.f), rowY });
+            m_mainLayer->addChild(v);
+
+            if (isID) {
+                auto id = lvl.levelID;
+                auto copy = textButton("Copy", "GJ_button_04.png", 0.35f, [id] {
+                    if (clipboard::write(id)) Notification::create("Level ID copied", NotificationIcon::Success)->show();
+                }, "bigFont.fnt");
+                copy->setPosition({ W - 42.f, rowY });
+                m_buttonMenu->addChild(copy);
+            }
+            rowY -= 20.f;
+        }
+
+        // Buttons
+        if (!lvl.levelID.empty()) {
+            auto id = lvl.levelID;
+            auto play = textButton("Play level", "GJ_button_01.png", 0.7f, [id] { openLevel(id); });
+            play->setPosition({ W / 2, 58.f });
+            m_buttonMenu->addChild(play);
+        } else {
+            auto noId = CCLabelBMFont::create("No level ID on the list yet", "chatFont.fnt");
+            noId->setScale(0.6f);
+            noId->setColor(COL_MUTED);
+            noId->setPosition({ W / 2, 58.f });
+            m_mainLayer->addChild(noId);
+        }
+
+        float smallY = 24.f;
+        if (!lvl.videoUrl.empty()) {
+            auto url = lvl.videoUrl;
+            auto video = textButton("Video", "GJ_button_05.png", 0.55f, [url] { web::openLinkInBrowser(url); }, "bigFont.fnt");
+            video->setPosition({ W / 2 - 92.f, smallY });
+            m_buttonMenu->addChild(video);
+        }
+        if (!lvl.pageUrl.empty()) {
+            auto url = std::string(SITE_ROOT) + lvl.pageUrl;
+            auto site = textButton("On site", "GJ_button_04.png", 0.55f, [url] { web::openLinkInBrowser(url); }, "bigFont.fnt");
+            site->setPosition({ W / 2, smallY });
+            m_buttonMenu->addChild(site);
+        }
+        this->updateFavButton();
+        return true;
+    }
+
+    void updateFavButton() {
+        if (m_favBtn) m_favBtn->removeFromParent();
+        bool fav = isFavorite(m_level);
+        m_favBtn = textButton(fav ? "Unfavorite" : "Favorite", fav ? "GJ_button_02.png" : "GJ_button_04.png", 0.55f, [this] {
+            setFavorite(m_level, !isFavorite(m_level));
+            this->updateFavButton();
+            if (m_onFavoriteChanged) m_onFavoriteChanged();
+        }, "bigFont.fnt");
+        m_favBtn->setPosition({ W / 2 + 100.f, 24.f });
+        m_buttonMenu->addChild(m_favBtn);
+    }
+
+public:
+    static GdglLevelPopup* create(ListLevel level, std::function<void()> onFavoriteChanged) {
+        auto ret = new GdglLevelPopup();
+        if (ret->init(std::move(level), std::move(onFavoriteChanged))) {
+            ret->autorelease();
+            return ret;
+        }
+        delete ret;
+        return nullptr;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Main list popup
+// ---------------------------------------------------------------------------
+
 class GdglListPopup : public Popup {
 protected:
-    static constexpr float WIDTH = 400.f;
-    static constexpr float HEIGHT = 290.f;
-    static constexpr float LIST_W = 360.f;
-    static constexpr float LIST_H = 168.f;
-    static constexpr float LIST_Y = 116.f; // centre of the list
-    static constexpr float ROW_H = 34.f;
+    static constexpr float W = 420.f;
+    static constexpr float H = 310.f;
+    static constexpr float LIST_W = 396.f;
+    static constexpr float LIST_TOP = H - 104.f;
+    static constexpr float LIST_BOTTOM = 40.f;
+    static constexpr float LIST_H = LIST_TOP - LIST_BOTTOM;
+    static constexpr float ROW_H = 36.f;
 
     ScrollLayer* m_list = nullptr;
     CCLabelBMFont* m_status = nullptr;
+    CCLabelBMFont* m_subtitle = nullptr;
+    CCLabelBMFont* m_sourceLbl = nullptr;
+    CCDrawNode* m_sourceDot = nullptr;
     CCMenu* m_tabMenu = nullptr;
+    CCMenuItemSpriteExtra* m_favToggle = nullptr;
+
     std::vector<ListLevel> m_levels;
     std::string m_filter = "all";
     std::string m_search;
-    TextInput* m_searchInput = nullptr;
+    bool m_favOnly = false;
+    bool m_fromBackup = false;
     async::TaskHolder<web::WebResponse> m_task;
 
     bool init() {
-        if (!Popup::init(WIDTH, HEIGHT)) return false;
-        this->setTitle("GD Gaming List");
+        if (!Popup::init(W, H)) return false;
 
-        auto center = m_mainLayer->getContentSize() / 2;
+        // ----- Header
+        auto header = panel({ W - 16.f, 40.f }, COL_DARK);
+        header->setPosition({ W / 2, H - 28.f });
+        m_mainLayer->addChild(header);
 
-        auto bg = CCScale9Sprite::create("square02b_001.png");
-        bg->setColor({ 0, 0, 0 });
-        bg->setOpacity(80);
-        bg->setContentSize({ LIST_W + 6.f, LIST_H + 6.f });
-        bg->setPosition({ center.width, LIST_Y });
-        m_mainLayer->addChild(bg);
+        auto logo = panel({ 30.f, 30.f }, COL_GOLD);
+        logo->setPosition({ 48.f, H - 28.f });
+        m_mainLayer->addChild(logo);
+        auto logoLbl = CCLabelBMFont::create("GL", "bigFont.fnt");
+        logoLbl->setScale(0.45f);
+        logoLbl->setColor(COL_DARK);
+        logoLbl->setPosition({ 48.f, H - 28.f });
+        m_mainLayer->addChild(logoLbl);
+
+        auto title = CCLabelBMFont::create("GD Gaming List", "goldFont.fnt");
+        title->setAnchorPoint({ 0.f, 0.5f });
+        title->setScale(0.65f);
+        title->setPosition({ 70.f, H - 21.f });
+        m_mainLayer->addChild(title);
+
+        m_subtitle = CCLabelBMFont::create("Loading...", "chatFont.fnt");
+        m_subtitle->setAnchorPoint({ 0.f, 0.5f });
+        m_subtitle->setScale(0.55f);
+        m_subtitle->setColor(COL_MUTED);
+        m_subtitle->setPosition({ 71.f, H - 37.f });
+        m_mainLayer->addChild(m_subtitle);
+
+        auto random = textButton("Random", "GJ_button_04.png", 0.5f, [this] { this->openRandom(); }, "bigFont.fnt");
+        random->setPosition({ W - 52.f, H - 28.f });
+        m_buttonMenu->addChild(random);
+
+        // ----- Search + favourites toggle
+        auto search = TextInput::create(420.f, "Search levels or players", "bigFont.fnt");
+        search->setScale(0.8f);
+        search->setPosition({ W / 2 - 18.f, H - 64.f });
+        search->setCallback([this](std::string const& text) {
+            m_search = lower(text);
+            this->rebuild();
+        });
+        m_mainLayer->addChild(search);
+        this->updateFavToggle();
+
+        // ----- Section tabs (built once the list loads)
+        m_tabMenu = CCMenu::create();
+        m_tabMenu->setContentSize({ LIST_W, 22.f });
+        m_tabMenu->ignoreAnchorPointForPosition(false);
+        m_tabMenu->setPosition({ W / 2, H - 90.f });
+        m_tabMenu->setLayout(RowLayout::create()->setGap(6.f));
+        m_mainLayer->addChild(m_tabMenu);
+
+        // ----- List
+        auto listBg = panel({ LIST_W + 6.f, LIST_H + 6.f }, { 0, 0, 0 }, 70);
+        listBg->setPosition({ W / 2, LIST_BOTTOM + LIST_H / 2 });
+        m_mainLayer->addChild(listBg);
 
         m_list = ScrollLayer::create({ LIST_W, LIST_H });
-        m_list->setPosition({ center.width - LIST_W / 2, LIST_Y - LIST_H / 2 });
-        m_list->m_contentLayer->setLayout(ScrollLayer::createDefaultListLayout(3.f));
+        m_list->setPosition({ W / 2 - LIST_W / 2, LIST_BOTTOM });
+        m_list->m_contentLayer->setLayout(ScrollLayer::createDefaultListLayout(4.f));
         m_mainLayer->addChild(m_list);
 
         m_status = CCLabelBMFont::create("Loading...", "bigFont.fnt");
         m_status->setScale(0.5f);
-        m_status->setPosition({ center.width, LIST_Y });
+        m_status->setPosition({ W / 2, LIST_BOTTOM + LIST_H / 2 });
         m_mainLayer->addChild(m_status, 5);
 
-        // Tabs get built once we know which sections the list has (Main, Extended, Legacy...)
-        m_tabMenu = CCMenu::create();
-        m_tabMenu->setContentSize({ LIST_W, 24.f });
-        m_tabMenu->setPosition({ center.width, HEIGHT - 46.f });
-        m_tabMenu->ignoreAnchorPointForPosition(false);
-        m_tabMenu->setLayout(RowLayout::create()->setGap(6.f));
-        m_mainLayer->addChild(m_tabMenu);
+        // ----- Bottom bar
+        auto bar = panel({ W - 16.f, 26.f }, COL_DARK);
+        bar->setPosition({ W / 2, 21.f });
+        m_mainLayer->addChild(bar);
 
-        // Search bar: filters by level name, creator, publisher or verifier as you type
-        m_searchInput = TextInput::create(LIST_W - 10.f, "Search levels...", "bigFont.fnt");
-        m_searchInput->setPosition({ center.width, HEIGHT - 74.f });
-        m_searchInput->setScale(0.85f);
-        m_searchInput->setCallback([this](std::string const& text) {
-            m_search = lower(text);
-            this->rebuild();
-        });
-        m_mainLayer->addChild(m_searchInput);
+        m_sourceDot = CCDrawNode::create();
+        m_sourceDot->setPosition({ 22.f, 21.f });
+        m_mainLayer->addChild(m_sourceDot);
 
-        auto webSpr = ButtonSprite::create("Website", "goldFont.fnt", "GJ_button_01.png", 0.8f);
-        webSpr->setScale(0.55f);
-        auto webBtn = CCMenuItemExt::createSpriteExtra(webSpr, [](CCMenuItemSpriteExtra*) {
-            web::openLinkInBrowser(LIST_SITE);
-        });
-        webBtn->setPosition({ center.width - 45.f, 14.f });
-        m_buttonMenu->addChild(webBtn);
+        m_sourceLbl = CCLabelBMFont::create("Connecting...", "chatFont.fnt");
+        m_sourceLbl->setAnchorPoint({ 0.f, 0.5f });
+        m_sourceLbl->setScale(0.55f);
+        m_sourceLbl->setColor(COL_MUTED);
+        m_sourceLbl->setPosition({ 32.f, 21.f });
+        m_mainLayer->addChild(m_sourceLbl);
+        this->setSource(false, false);
 
-        // Reload the list without closing the popup
-        auto refreshSpr = ButtonSprite::create("Refresh", "goldFont.fnt", "GJ_button_01.png", 0.8f);
-        refreshSpr->setScale(0.55f);
-        auto refreshBtn = CCMenuItemExt::createSpriteExtra(refreshSpr, [this](CCMenuItemSpriteExtra*) {
-            m_list->m_contentLayer->removeAllChildren();
-            m_status->setString("Loading...");
-            m_status->setVisible(true);
-            this->load();
-        });
-        refreshBtn->setPosition({ center.width + 45.f, 14.f });
-        m_buttonMenu->addChild(refreshBtn);
+        auto site = textButton("Site", "GJ_button_04.png", 0.45f, [] { web::openLinkInBrowser(LIST_SITE); }, "bigFont.fnt");
+        site->setPosition({ W - 108.f, 21.f });
+        m_buttonMenu->addChild(site);
+
+        auto refresh = textButton("Refresh", "GJ_button_04.png", 0.45f, [this] { this->reload(); }, "bigFont.fnt");
+        refresh->setPosition({ W - 48.f, 21.f });
+        m_buttonMenu->addChild(refresh);
 
         this->load();
         return true;
     }
 
-    void showLevels(std::vector<ListLevel> levels) {
+    // ----- Loading
+
+    void setSource(bool loaded, bool backup) {
+        m_sourceDot->clear();
+        ccColor3B color = !loaded ? ccColor3B{ 150, 150, 150 } : backup ? ccColor3B{ 239, 159, 39 } : ccColor3B{ 111, 227, 111 };
+        m_sourceDot->drawDot({ 0.f, 0.f }, 4.f, toColor4F(color));
+        m_sourceLbl->setString(!loaded ? "Connecting..." : backup ? "Using backup copy" : "Live from website");
+    }
+
+    void reload() {
+        m_list->m_contentLayer->removeAllChildren();
+        m_status->setString("Loading...");
+        m_status->setVisible(true);
+        m_subtitle->setString("Loading...");
+        this->setSource(false, false);
+        this->load();
+    }
+
+    void showLevels(std::vector<ListLevel> levels, bool backup) {
         m_levels = std::move(levels);
+        m_fromBackup = backup;
+        this->setSource(true, backup);
+        m_subtitle->setString(fmt::format("{} levels  -  updated just now", m_levels.size()).c_str());
         this->buildTabs();
         this->rebuild();
     }
@@ -171,12 +547,12 @@ protected:
     void load() {
         web::WebRequest req;
         req.timeout(std::chrono::seconds(15));
-        req.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDGamingListMod/1.2");
+        req.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDGamingListMod/1.3");
 
         m_task.spawn(req.get(DATA_PAGE), [this](web::WebResponse res) {
             if (res.ok()) {
                 auto parsed = parseListPage(res.string().unwrapOr(""));
-                if (parsed) return this->showLevels(std::move(parsed).unwrap());
+                if (parsed) return this->showLevels(std::move(parsed).unwrap(), false);
                 log::warn("GDGL site page couldn't be read ({}), trying backup", parsed.unwrapErr());
             } else {
                 log::warn("GDGL site failed: HTTP {}, trying backup", res.code());
@@ -194,29 +570,65 @@ protected:
             if (!res.ok()) {
                 log::warn("GDGL backup failed: HTTP {}", res.code());
                 m_status->setString("Couldn't load the list.\nCheck your internet and press Refresh.");
+                m_subtitle->setString("Not loaded");
                 return;
             }
             auto parsed = parseLevels(res.string().unwrapOr(""));
             if (!parsed) {
                 log::warn("GDGL backup couldn't be read: {}", parsed.unwrapErr());
                 m_status->setString("Couldn't read the list.\nPress Refresh to try again.");
+                m_subtitle->setString("Not loaded");
                 return;
             }
-            this->showLevels(std::move(parsed).unwrap());
+            this->showLevels(std::move(parsed).unwrap(), true);
         });
+    }
+
+    // ----- Filters
+
+    bool matches(ListLevel const& lvl) const {
+        if (m_filter != "all" && lvl.bucket != m_filter) return false;
+        if (m_favOnly && !isFavorite(lvl)) return false;
+        if (m_search.empty()) return true;
+        return lower(lvl.name).find(m_search) != std::string::npos
+            || lower(lvl.byline).find(m_search) != std::string::npos
+            || lower(lvl.creator).find(m_search) != std::string::npos
+            || fmt::format("#{}", lvl.position) == m_search
+            || std::to_string(lvl.position) == m_search
+            || lvl.levelID == m_search;
+    }
+
+    void updateFavToggle() {
+        if (m_favToggle) m_favToggle->removeFromParent();
+        auto spr = CircleButtonSprite::createWithSpriteFrameName(
+            "GJ_starsIcon_001.png", 1.f,
+            m_favOnly ? CircleBaseColor::Green : CircleBaseColor::Gray,
+            CircleBaseSize::Small
+        );
+        spr->setScale(0.7f);
+        m_favToggle = CCMenuItemExt::createSpriteExtra(spr, [this](CCMenuItemSpriteExtra*) {
+            m_favOnly = !m_favOnly;
+            this->updateFavToggle();
+            this->rebuild();
+            if (m_favOnly) Notification::create("Showing your favorites", NotificationIcon::Info, 1.f)->show();
+        });
+        m_favToggle->setPosition({ W - 28.f, H - 64.f });
+        m_buttonMenu->addChild(m_favToggle);
     }
 
     void buildTabs() {
         std::vector<std::string> buckets = { "all" };
         for (auto& lvl : m_levels) {
-            if (std::find(buckets.begin(), buckets.end(), lvl.bucket) == buckets.end()) {
-                buckets.push_back(lvl.bucket);
-            }
+            if (std::find(buckets.begin(), buckets.end(), lvl.bucket) == buckets.end()) buckets.push_back(lvl.bucket);
         }
         m_tabMenu->removeAllChildren();
         for (auto& bucket : buckets) {
-            auto spr = ButtonSprite::create(capitalize(bucket).c_str(), "bigFont.fnt", "GJ_button_04.png", 0.8f);
-            spr->setScale(0.5f);
+            size_t count = bucket == "all"
+                ? m_levels.size()
+                : std::count_if(m_levels.begin(), m_levels.end(), [&](auto const& l) { return l.bucket == bucket; });
+            auto text = fmt::format("{} {}", capitalize(bucket), count);
+            auto spr = ButtonSprite::create(text.c_str(), "bigFont.fnt", "GJ_button_04.png", 0.8f);
+            spr->setScale(0.45f);
             auto btn = CCMenuItemExt::createSpriteExtra(spr, [this, bucket](CCMenuItemSpriteExtra*) {
                 m_filter = bucket;
                 this->rebuild();
@@ -242,80 +654,123 @@ protected:
 
         int shown = 0;
         for (auto& lvl : m_levels) {
-            if (m_filter != "all" && lvl.bucket != m_filter) continue;
-            if (!m_search.empty()
-                && lower(lvl.name).find(m_search) == std::string::npos
-                && lower(lvl.byline).find(m_search) == std::string::npos
-                && fmt::format("#{}", lvl.position) != m_search
-                && std::to_string(lvl.position) != m_search) continue;
+            if (!this->matches(lvl)) continue;
             content->addChild(this->createRow(lvl));
             shown++;
         }
 
-        if (m_levels.empty()) m_status->setString("The list is empty.");
-        else if (shown == 0 && !m_search.empty()) m_status->setString("No levels match your search.");
-        else if (shown == 0) m_status->setString("No levels here.");
-        m_status->setVisible(shown == 0);
+        if (m_levels.empty()) {
+            // still loading or failed; keep the current status text
+        } else if (shown == 0 && m_favOnly) {
+            m_status->setString("No favorites yet.\nOpen a level and press Favorite.");
+        } else if (shown == 0 && !m_search.empty()) {
+            m_status->setString("No levels match your search.");
+        } else if (shown == 0) {
+            m_status->setString("No levels here.");
+        }
+        m_status->setVisible(m_levels.empty() || shown == 0);
 
         content->updateLayout();
         m_list->scrollToTop();
     }
 
+    void openDetails(ListLevel const& lvl) {
+        auto popup = GdglLevelPopup::create(lvl, [this] {
+            if (m_favOnly) this->rebuild();
+        });
+        if (popup) popup->show();
+    }
+
+    void openRandom() {
+        std::vector<ListLevel const*> pool;
+        for (auto& lvl : m_levels) if (this->matches(lvl)) pool.push_back(&lvl);
+        if (pool.empty()) for (auto& lvl : m_levels) pool.push_back(&lvl);
+        if (pool.empty()) {
+            Notification::create("The list isn't loaded yet", NotificationIcon::Warning)->show();
+            return;
+        }
+        auto index = static_cast<size_t>(random::generate<uint64_t>() % pool.size());
+        this->openDetails(*pool[index]);
+    }
+
     CCNode* createRow(ListLevel const& lvl) {
+        bool ext = lvl.bucket == "extended";
         auto row = CCNode::create();
         row->setContentSize({ LIST_W, ROW_H });
 
-        // Main = brown, Extended = blue-ish, others = grey (like section colours on demon lists)
-        ccColor3B color = lvl.bucket == "main"
-            ? (lvl.position % 2 ? ccColor3B{ 161, 88, 44 } : ccColor3B{ 194, 114, 62 })
-            : lvl.bucket == "extended"
-                ? (lvl.position % 2 ? ccColor3B{ 52, 86, 150 } : ccColor3B{ 70, 108, 176 })
-                : (lvl.position % 2 ? ccColor3B{ 80, 80, 80 } : ccColor3B{ 105, 105, 105 });
+        auto bg = panel({ LIST_W - 4.f, ROW_H }, ext ? COL_EXT : COL_MAIN);
+        bg->setPosition({ LIST_W / 2, ROW_H / 2 });
+        row->addChild(bg);
 
-        auto rowBg = CCScale9Sprite::create("square02b_001.png");
-        rowBg->setColor(color);
-        rowBg->setContentSize({ LIST_W - 4.f, ROW_H });
-        rowBg->setPosition({ LIST_W / 2, ROW_H / 2 });
-        row->addChild(rowBg);
+        // Coloured strip on the left: medal colour for the top 3
+        ccColor3B strip = ext ? ccColor3B{ 133, 183, 235 } : ccColor3B{ 176, 112, 60 };
+        if (!ext && lvl.position == 1) strip = COL_GOLD;
+        if (!ext && lvl.position == 2) strip = COL_SILVER;
+        if (!ext && lvl.position == 3) strip = COL_BRONZE;
+        auto stripNode = CCLayerColor::create({ strip.r, strip.g, strip.b, 255 }, 4.f, ROW_H - 4.f);
+        stripNode->setPosition({ 4.f, 2.f });
+        row->addChild(stripNode);
 
-        auto rankLbl = CCLabelBMFont::create(fmt::format("#{}", lvl.position).c_str(), "goldFont.fnt");
-        rankLbl->limitLabelWidth(40.f, 0.65f, 0.3f);
-        rankLbl->setPosition({ 26.f, ROW_H / 2 });
-        row->addChild(rankLbl);
+        auto badge = rankBadge(lvl, 13.f);
+        badge->setPosition({ 26.f, ROW_H / 2 });
+        row->addChild(badge);
 
-        auto nameLbl = CCLabelBMFont::create(lvl.name.c_str(), "bigFont.fnt");
-        nameLbl->setAnchorPoint({ 0.f, 0.5f });
-        nameLbl->limitLabelWidth(200.f, 0.5f, 0.2f);
-        nameLbl->setPosition({ 52.f, ROW_H / 2 + 6.f });
-        row->addChild(nameLbl);
+        auto name = CCLabelBMFont::create(lvl.name.c_str(), "bigFont.fnt");
+        name->setAnchorPoint({ 0.f, 0.5f });
+        name->limitLabelWidth(ext ? 210.f : 250.f, 0.48f, 0.2f);
+        name->setPosition({ 46.f, ROW_H / 2 + 7.f });
+        row->addChild(name);
 
-        auto infoLbl = CCLabelBMFont::create(lvl.byline.c_str(), "chatFont.fnt");
-        infoLbl->setAnchorPoint({ 0.f, 0.5f });
-        infoLbl->limitLabelWidth(220.f, 0.55f, 0.2f);
-        infoLbl->setPosition({ 52.f, ROW_H / 2 - 7.f });
-        row->addChild(infoLbl);
+        auto info = CCLabelBMFont::create(lvl.byline.c_str(), "chatFont.fnt");
+        info->setAnchorPoint({ 0.f, 0.5f });
+        info->limitLabelWidth(270.f, 0.5f, 0.2f);
+        info->setColor(ext ? ccColor3B{ 219, 230, 251 } : ccColor3B{ 232, 207, 178 });
+        info->setPosition({ 46.f, ROW_H / 2 - 8.f });
+        row->addChild(info);
+
+        if (ext) {
+            auto tag = panel({ 30.f, 13.f }, { 133, 183, 235 });
+            tag->setPosition({ LIST_W - 74.f, ROW_H / 2 + 7.f });
+            row->addChild(tag);
+            auto tagLbl = CCLabelBMFont::create("EXT", "bigFont.fnt");
+            tagLbl->setScale(0.3f);
+            tagLbl->setColor({ 12, 68, 124 });
+            tagLbl->setPosition(tag->getPosition());
+            row->addChild(tagLbl);
+        }
+
+        if (isFavorite(lvl)) {
+            auto star = CCSprite::createWithSpriteFrameName("GJ_starsIcon_001.png");
+            if (star) {
+                star->setScale(0.45f);
+                star->setPosition({ LIST_W - 74.f, ROW_H / 2 - 7.f });
+                row->addChild(star);
+            }
+        }
+
+        auto menu = CCMenu::create();
+        menu->setPosition({ 0.f, 0.f });
+        menu->setContentSize(row->getContentSize());
+        row->addChild(menu);
+
+        // Tap anywhere on the row to open the details
+        auto hit = CCNode::create();
+        hit->setContentSize({ LIST_W - 56.f, ROW_H });
+        auto open = CCMenuItemExt::createSpriteExtra(hit, [this, lvl](CCMenuItemSpriteExtra*) { this->openDetails(lvl); });
+        open->m_scaleMultiplier = 1.0f;
+        open->setPosition({ (LIST_W - 56.f) / 2, ROW_H / 2 });
+        menu->addChild(open);
 
         if (!lvl.levelID.empty()) {
-            auto menu = CCMenu::create();
-            menu->setPosition({ 0.f, 0.f });
-            menu->setContentSize(row->getContentSize());
-            row->addChild(menu);
-
-            auto spr = ButtonSprite::create("View", "bigFont.fnt", "GJ_button_01.png", 0.8f);
-            spr->setScale(0.5f);
             auto id = lvl.levelID;
-            auto btn = CCMenuItemExt::createSpriteExtra(spr, [id](CCMenuItemSpriteExtra*) {
-                auto search = GJSearchObject::create(SearchType::Search, id);
-                auto scene = LevelBrowserLayer::scene(search);
-                CCDirector::sharedDirector()->pushScene(CCTransitionFade::create(0.5f, scene));
-            });
-            btn->setPosition({ LIST_W - 38.f, ROW_H / 2 });
-            menu->addChild(btn);
+            auto play = CCMenuItemExt::createSpriteExtra(playSprite(0.32f), [id](CCMenuItemSpriteExtra*) { openLevel(id); });
+            play->setPosition({ LIST_W - 28.f, ROW_H / 2 });
+            menu->addChild(play);
         } else {
             auto noId = CCLabelBMFont::create("No ID", "goldFont.fnt");
             noId->setScale(0.4f);
             noId->setOpacity(150);
-            noId->setPosition({ LIST_W - 38.f, ROW_H / 2 });
+            noId->setPosition({ LIST_W - 28.f, ROW_H / 2 });
             row->addChild(noId);
         }
 
@@ -358,6 +813,7 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
         return true;
     }
 };
+
 
 // ---------------------------------------------------------------------------
 // Self-updater: checks GitHub for a newer build when GD starts
