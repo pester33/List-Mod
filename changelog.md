@@ -1,3 +1,7 @@
+# v1.3.1
+- Fixed the list not scrolling
+- Level details now open with the (i) button on each level
+
 # v1.3.0
 - New look: header with level count, gold/silver/bronze medals for the top 3, EXT tags, section counts on the tabs
 - Tap a level to open its details: publisher, verifier, Level ID (with Copy), points, video thumbnail, Play, Video and On site buttons

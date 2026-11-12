@@ -717,20 +717,20 @@ protected:
 
         auto name = CCLabelBMFont::create(lvl.name.c_str(), "bigFont.fnt");
         name->setAnchorPoint({ 0.f, 0.5f });
-        name->limitLabelWidth(ext ? 210.f : 250.f, 0.48f, 0.2f);
+        name->limitLabelWidth(ext ? 200.f : 230.f, 0.48f, 0.2f);
         name->setPosition({ 46.f, ROW_H / 2 + 7.f });
         row->addChild(name);
 
-        auto info = CCLabelBMFont::create(lvl.byline.c_str(), "chatFont.fnt");
-        info->setAnchorPoint({ 0.f, 0.5f });
-        info->limitLabelWidth(270.f, 0.5f, 0.2f);
-        info->setColor(ext ? ccColor3B{ 219, 230, 251 } : ccColor3B{ 232, 207, 178 });
-        info->setPosition({ 46.f, ROW_H / 2 - 8.f });
-        row->addChild(info);
+        auto byline = CCLabelBMFont::create(lvl.byline.c_str(), "chatFont.fnt");
+        byline->setAnchorPoint({ 0.f, 0.5f });
+        byline->limitLabelWidth(240.f, 0.5f, 0.2f);
+        byline->setColor(ext ? ccColor3B{ 219, 230, 251 } : ccColor3B{ 232, 207, 178 });
+        byline->setPosition({ 46.f, ROW_H / 2 - 8.f });
+        row->addChild(byline);
 
         if (ext) {
             auto tag = panel({ 30.f, 13.f }, { 133, 183, 235 });
-            tag->setPosition({ LIST_W - 74.f, ROW_H / 2 + 7.f });
+            tag->setPosition({ LIST_W - 100.f, ROW_H / 2 });
             row->addChild(tag);
             auto tagLbl = CCLabelBMFont::create("EXT", "bigFont.fnt");
             tagLbl->setScale(0.3f);
@@ -743,7 +743,7 @@ protected:
             auto star = CCSprite::createWithSpriteFrameName("GJ_starsIcon_001.png");
             if (star) {
                 star->setScale(0.45f);
-                star->setPosition({ LIST_W - 74.f, ROW_H / 2 - 7.f });
+                star->setPosition({ LIST_W - (ext ? 128.f : 100.f), ROW_H / 2 });
                 row->addChild(star);
             }
         }
@@ -753,13 +753,17 @@ protected:
         menu->setContentSize(row->getContentSize());
         row->addChild(menu);
 
-        // Tap anywhere on the row to open the details
-        auto hit = CCNode::create();
-        hit->setContentSize({ LIST_W - 56.f, ROW_H });
-        auto open = CCMenuItemExt::createSpriteExtra(hit, [this, lvl](CCMenuItemSpriteExtra*) { this->openDetails(lvl); });
-        open->m_scaleMultiplier = 1.0f;
-        open->setPosition({ (LIST_W - 56.f) / 2, ROW_H / 2 });
-        menu->addChild(open);
+        // Small info button opens the details. (A full-row button would swallow drags and break scrolling.)
+        CCNode* infoSpr = CCSprite::createWithSpriteFrameName("GJ_infoIcon_001.png");
+        if (infoSpr) infoSpr->setScale(0.7f);
+        else {
+            auto b = ButtonSprite::create("i", "bigFont.fnt", "GJ_button_04.png", 0.8f);
+            b->setScale(0.45f);
+            infoSpr = b;
+        }
+        auto info = CCMenuItemExt::createSpriteExtra(infoSpr, [this, lvl](CCMenuItemSpriteExtra*) { this->openDetails(lvl); });
+        info->setPosition({ LIST_W - 64.f, ROW_H / 2 });
+        menu->addChild(info);
 
         if (!lvl.levelID.empty()) {
             auto id = lvl.levelID;
