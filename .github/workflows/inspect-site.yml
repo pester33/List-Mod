@@ -1,0 +1,29 @@
+name: Inspect list site
+on:
+  push:
+    branches: [diag2]
+permissions:
+  contents: write
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch like the mod does
+        run: |
+          mkdir -p dump && cd dump
+          U="http://gdgl.x10.mx/gdgaminglist/roulette"
+          MODUA="Mozilla/5.0 (Geode; GD Gaming List mod)"
+          BROWSER="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36"
+          curl -sS -A "$MODUA" -D h_mod.txt -o mod.html "$U" || true
+          curl -sS -L -A "$MODUA" -D h_modL.txt -o modL.html "$U" || true
+          curl -sS -L -A "$BROWSER" -D h_browser.txt -o browser.html "$U" || true
+          curl -sS -L -D h_none.txt -o none.html "$U" || true
+          curl -sS -L -A "$MODUA" -D h_https.txt -o https.html "https://gdgl.x10.mx/gdgaminglist/roulette" || true
+          for f in *.html; do echo "$f $(wc -c < $f) $(grep -c roulette-data $f)"; done | tee summary.txt
+      - run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add dump
+          git commit -m dump
+          git push
