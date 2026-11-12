@@ -3,12 +3,13 @@
 Official mod for the GD Gaming List (gdgl.x10.mx): browse the list inside Geometry Dash 2.2091 (Geode 6.0.0-alpha.1).
 
 ## Download
-Every push builds the mod on GitHub Actions and publishes it here:
-https://github.com/pester33/List-Mod/releases/download/latest-build-2.2091/pester.gdgl-list.geode
+Every push builds the mod for both GD versions on GitHub Actions:
 
-(The old `latest-build` release is the last version for GD 2.2081.)
+- **GD 2.2091** (Geode 6): https://github.com/pester33/List-Mod/releases/download/latest-build-2.2091/pester.gdgl-list.geode
+- **GD 2.2081** (Geode 5.11.2): https://github.com/pester33/List-Mod/releases/download/latest-build/pester.gdgl-list.geode
 
-Put the `.geode` file in `Geometry Dash/geode/mods` and restart GD.
+Put the `.geode` file in `Geometry Dash/geode/mods` and restart GD. After that the mod updates itself from inside the game
+(each GD version only gets updates built for it).
 
 ## How it works
 The list site embeds the full level list as JSON on its Roulette page

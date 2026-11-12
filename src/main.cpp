@@ -819,8 +819,12 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
 // Self-updater: checks GitHub for a newer build when GD starts
 // ---------------------------------------------------------------------------
 
-// Builds for GD 2.2091 live on their own release, so old 2.2081 copies never download them
+// Each GD version has its own release, so the updater never installs a build for the wrong GD version
+#if GEODE_COMP_GD_VERSION >= 22091
 static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build-2.2091/";
+#else
+static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build/";
+#endif
 
 static async::TaskHolder<web::WebResponse> s_updateTask;
 

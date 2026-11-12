@@ -1,0 +1,78 @@
+name: Build Geode Mod (GD 2.2081)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "data/**"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+        - name: Windows
+          os: windows-latest
+
+        - name: Android32
+          os: ubuntu-latest
+          target: Android32
+
+        - name: Android64
+          os: ubuntu-latest
+          target: Android64
+
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Switch mod.json to GD 2.2081 / Geode 5.11.2
+        shell: bash
+        run: |
+          jq '.geode = "5.11.2" | .gd = {"win": "2.2081", "android": "2.2081"}' mod.json > mod.tmp.json
+          mv mod.tmp.json mod.json
+          cat mod.json | head -8
+
+      - name: Build the mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          combine: true
+          target: ${{ matrix.config.target }}
+
+  package:
+    name: Package builds
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    needs: ['build']
+
+    steps:
+      - uses: geode-sdk/build-geode-mod/combine@main
+        id: build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Build Output
+          path: ${{ steps.build.outputs.build-output }}
+
+      - uses: actions/checkout@v4
+        with:
+          path: src-repo
+
+      - name: Write version.txt (used by the in-game updater)
+        run: jq -r '.version' src-repo/mod.json > "${{ steps.build.outputs.build-output }}/version.txt"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: GD Gaming List mod (GD 2.2081)
+          make_latest: false
+          files: |
+            ${{ steps.build.outputs.build-output }}/*.geode
+            ${{ steps.build.outputs.build-output }}/version.txt
