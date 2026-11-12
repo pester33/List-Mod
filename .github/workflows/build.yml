@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - "**"
+      - main
+    paths-ignore:
+      - "data/**"
 
 jobs:
   build:
@@ -61,8 +63,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest-build
-          name: GD Gaming List mod (latest build)
+          tag_name: latest-build-2.2091
+          name: GD Gaming List mod (GD 2.2091)
           make_latest: true
           files: |
             ${{ steps.build.outputs.build-output }}/*.geode

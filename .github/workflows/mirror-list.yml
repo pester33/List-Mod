@@ -1,0 +1,61 @@
+name: Update list backup
+
+# Copies the GD Gaming List data from the website into data/levels.json.
+# The mod uses this copy when a player's network can't load the site properly.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mirror-list.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-list
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download list from the website
+        run: |
+          curl -sS -L --retry 3 --max-time 30 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDGamingListMirror/1.0" \
+            "http://gdgl.x10.mx/gdgaminglist/roulette" -o page.html
+
+      - name: Extract and check the list data
+        run: |
+          python3 - <<'PY'
+          import json, re, sys, os
+          html = open("page.html", encoding="utf-8", errors="replace").read()
+          m = re.search(r'id="roulette-data"[^>]*>(.*?)</script>', html, re.S)
+          if not m:
+              print("List data not found on the page, keeping the old backup")
+              sys.exit(0)
+          data = json.loads(m.group(1))
+          if not isinstance(data, list) or len(data) < 5:
+              print("List data looks wrong, keeping the old backup")
+              sys.exit(0)
+          os.makedirs("data", exist_ok=True)
+          with open("data/levels.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=1)
+              f.write("\n")
+          print(f"Saved {len(data)} levels")
+          PY
+          rm -f page.html
+
+      - name: Commit if the list changed
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add data/levels.json 2>/dev/null || exit 0
+          git diff --cached --quiet && { echo "No changes"; exit 0; }
+          git commit -m "Update list backup"
+          git push

@@ -11,8 +11,11 @@ using namespace geode::prelude;
 // <script id="roulette-data" type="application/json">[ ... ]</script>
 static constexpr auto LIST_SITE = "http://gdgl.x10.mx/gdgaminglist/";
 static constexpr auto DATA_PAGE = "http://gdgl.x10.mx/gdgaminglist/roulette";
-static constexpr auto DATA_START = "<script id=\"roulette-data\" type=\"application/json\">";
+static constexpr auto DATA_MARKER = "id=\"roulette-data\"";
 static constexpr auto DATA_END = "</script>";
+// Backup copy of the list, refreshed by a GitHub Action every 30 minutes.
+// Used when the site can't be reached or sends back a different page (some networks do that).
+static constexpr auto MIRROR_URL = "https://raw.githubusercontent.com/pester33/List-Mod/main/data/levels.json";
 
 struct ListLevel {
     int position = 0;
@@ -32,16 +35,12 @@ static std::string capitalize(std::string s) {
     return s;
 }
 
-// Pulls the embedded JSON out of the page and turns it into levels
-static Result<std::vector<ListLevel>> parseListPage(std::string const& html) {
-    auto start = html.find(DATA_START);
-    if (start == std::string::npos) return Err("List data not found on the page");
-    start += std::string_view(DATA_START).size();
-    auto end = html.find(DATA_END, start);
-    if (end == std::string::npos) return Err("List data is cut off");
-
-    GEODE_UNWRAP_INTO(auto json, matjson::parse(std::string_view(html).substr(start, end - start)));
-    if (!json.isArray()) return Err("List data isn't a list");
+// Turns the list JSON (an array of levels) into levels
+static Result<std::vector<ListLevel>> parseLevels(std::string_view text) {
+    auto parsed = matjson::parse(text);
+    if (!parsed) return Err("List data isn't valid JSON");
+    auto json = std::move(parsed).unwrap();
+    if (!json.isArray() || json.size() == 0) return Err("List data is empty");
 
     std::vector<ListLevel> levels;
     for (auto& entry : json) {
@@ -65,6 +64,18 @@ static Result<std::vector<ListLevel>> parseListPage(std::string const& html) {
         return a.position < b.position;
     });
     return Ok(std::move(levels));
+}
+
+// Finds the embedded list JSON on the site's Roulette page
+static Result<std::vector<ListLevel>> parseListPage(std::string const& html) {
+    auto marker = html.find(DATA_MARKER);
+    if (marker == std::string::npos) return Err("List data not found on the page");
+    auto start = html.find('>', marker);
+    if (start == std::string::npos) return Err("List data is cut off");
+    start += 1;
+    auto end = html.find(DATA_END, start);
+    if (end == std::string::npos) return Err("List data is cut off");
+    return parseLevels(std::string_view(html).substr(start, end - start));
 }
 
 class GdglListPopup : public Popup {
@@ -131,33 +142,67 @@ protected:
         auto webBtn = CCMenuItemExt::createSpriteExtra(webSpr, [](CCMenuItemSpriteExtra*) {
             web::openLinkInBrowser(LIST_SITE);
         });
-        webBtn->setPosition({ center.width, 14.f });
+        webBtn->setPosition({ center.width - 45.f, 14.f });
         m_buttonMenu->addChild(webBtn);
+
+        // Reload the list without closing the popup
+        auto refreshSpr = ButtonSprite::create("Refresh", "goldFont.fnt", "GJ_button_01.png", 0.8f);
+        refreshSpr->setScale(0.55f);
+        auto refreshBtn = CCMenuItemExt::createSpriteExtra(refreshSpr, [this](CCMenuItemSpriteExtra*) {
+            m_list->m_contentLayer->removeAllChildren();
+            m_status->setString("Loading...");
+            m_status->setVisible(true);
+            this->load();
+        });
+        refreshBtn->setPosition({ center.width + 45.f, 14.f });
+        m_buttonMenu->addChild(refreshBtn);
 
         this->load();
         return true;
     }
 
+    void showLevels(std::vector<ListLevel> levels) {
+        m_levels = std::move(levels);
+        this->buildTabs();
+        this->rebuild();
+    }
+
+    // 1) Try the website itself
     void load() {
         web::WebRequest req;
         req.timeout(std::chrono::seconds(15));
-        req.userAgent("Mozilla/5.0 (Geode; GD Gaming List mod)");
+        req.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDGamingListMod/1.2");
 
         m_task.spawn(req.get(DATA_PAGE), [this](web::WebResponse res) {
+            if (res.ok()) {
+                auto parsed = parseListPage(res.string().unwrapOr(""));
+                if (parsed) return this->showLevels(std::move(parsed).unwrap());
+                log::warn("GDGL site page couldn't be read ({}), trying backup", parsed.unwrapErr());
+            } else {
+                log::warn("GDGL site failed: HTTP {}, trying backup", res.code());
+            }
+            this->loadMirror();
+        });
+    }
+
+    // 2) Fall back to the copy on GitHub
+    void loadMirror() {
+        web::WebRequest req;
+        req.timeout(std::chrono::seconds(15));
+
+        m_task.spawn(req.get(MIRROR_URL), [this](web::WebResponse res) {
             if (!res.ok()) {
-                log::warn("GDGL list failed: HTTP {}", res.code());
-                m_status->setString("Couldn't load the list.\nCheck your internet.");
+                log::warn("GDGL backup failed: HTTP {}", res.code());
+                m_status->setString("Couldn't load the list.\nCheck your internet and press Refresh.");
                 return;
             }
-            auto parsed = parseListPage(res.string().unwrapOr(""));
+            auto parsed = parseLevels(res.string().unwrapOr(""));
             if (!parsed) {
-                log::warn("GDGL list parse failed: {}", parsed.unwrapErr());
-                m_status->setString("Couldn't read the list.\nThe site may have changed.");
+                log::warn("GDGL backup couldn't be read: {}", parsed.unwrapErr());
+                m_status->setString("Couldn't read the list.\nPress Refresh to try again.");
                 return;
             }
-            m_levels = std::move(parsed).unwrap();
-            this->buildTabs();
-            this->rebuild();
+            this->showLevels(std::move(parsed).unwrap());
         });
     }
 
@@ -318,7 +363,8 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
 // Self-updater: checks GitHub for a newer build when GD starts
 // ---------------------------------------------------------------------------
 
-static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build/";
+// Builds for GD 2.2091 live on their own release, so old 2.2081 copies never download them
+static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/releases/download/latest-build-2.2091/";
 
 static async::TaskHolder<web::WebResponse> s_updateTask;
 
