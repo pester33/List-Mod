@@ -205,6 +205,13 @@ static CCScale9Sprite* panel(CCSize size, ccColor3B color, GLubyte opacity = 255
 
 // Coloured circle with a number in it (gold / silver / bronze for the top 3)
 static CCNode* rankBadge(ListLevel const& lvl, float radius) {
+    // #1 gets the trophy
+    if (lvl.bucket == "main" && lvl.position == 1) {
+        if (auto trophy = CCSprite::create("gdgl_trophy.png"_spr)) {
+            trophy->setScale(radius * 2.3f / trophy->getContentSize().width);
+            return trophy;
+        }
+    }
     ccColor3B fill = lvl.bucket == "extended" ? ccColor3B{ 36, 64, 111 } : ccColor3B{ 74, 40, 16 };
     ccColor3B text = { 255, 255, 255 };
     if (lvl.bucket == "main" && lvl.position == 1) { fill = COL_GOLD; text = { 61, 34, 14 }; }
@@ -484,8 +491,25 @@ protected:
         m_subtitle->setPosition({ 71.f, H - 37.f });
         m_mainLayer->addChild(m_subtitle);
 
-        auto random = textButton("Random", "GJ_button_04.png", 0.5f, [this] { this->openRandom(); }, "bigFont.fnt");
-        random->setPosition({ W - 52.f, H - 28.f });
+        CCNode* randomSpr = nullptr;
+        if (auto eyes = CCSprite::create("gdgl_eyes.png"_spr)) {
+            auto node = CCNode::create();
+            node->setContentSize({ 50.f, 38.f });
+            eyes->setScale(26.f / eyes->getContentSize().width);
+            eyes->setPosition({ 25.f, 23.f });
+            node->addChild(eyes);
+            auto lbl = CCLabelBMFont::create("Random", "goldFont.fnt");
+            lbl->setScale(0.38f);
+            lbl->setPosition({ 25.f, 4.f });
+            node->addChild(lbl);
+            randomSpr = node;
+        } else {
+            auto b = ButtonSprite::create("Random", "bigFont.fnt", "GJ_button_04.png", 0.8f);
+            b->setScale(0.5f);
+            randomSpr = b;
+        }
+        auto random = CCMenuItemExt::createSpriteExtra(randomSpr, [this](CCMenuItemSpriteExtra*) { this->openRandom(); });
+        random->setPosition({ W - 46.f, H - 28.f });
         m_buttonMenu->addChild(random);
 
         // ----- Search + favourites toggle
@@ -594,7 +618,7 @@ protected:
                 }
             );
         });
-        m_updateBtn->setPosition({ W - 140.f, H - 28.f });
+        m_updateBtn->setPosition({ W - 128.f, H - 28.f });
         m_buttonMenu->addChild(m_updateBtn);
     }
 

@@ -1,3 +1,7 @@
+# v1.4.1
+- Trophy for the #1 level
+- New fire-eyes icon on the Random button
+
 # v1.4.0
 - Added the GD Gaming List logo: mod icon, list header, level details and the Search screen button
 
