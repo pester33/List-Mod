@@ -1,3 +1,7 @@
+# v1.3.2
+- Fixed the update popup not showing: the check now retries, waits for the menu to finish loading, and writes what it does to the Geode log
+- New Updates button in the list to check for updates any time
+
 # v1.3.1
 - Fixed the list not scrolling
 - Level details now open with the (i) button on each level

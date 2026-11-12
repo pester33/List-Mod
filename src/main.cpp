@@ -21,6 +21,8 @@ static constexpr auto DATA_END = "</script>";
 // Used when the site can't be reached or sends back a different page (some networks do that).
 static constexpr auto MIRROR_URL = "https://raw.githubusercontent.com/pester33/List-Mod/main/data/levels.json";
 
+static void checkForUpdate(bool manual, bool isRetry);
+
 // ---------------------------------------------------------------------------
 // Colours
 // ---------------------------------------------------------------------------
@@ -512,6 +514,10 @@ protected:
         refresh->setPosition({ W - 48.f, 21.f });
         m_buttonMenu->addChild(refresh);
 
+        auto updates = textButton("Updates", "GJ_button_04.png", 0.45f, [] { checkForUpdate(true, false); }, "bigFont.fnt");
+        updates->setPosition({ W - 172.f, 21.f });
+        m_buttonMenu->addChild(updates);
+
         this->load();
         return true;
     }
@@ -820,7 +826,7 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
 
 
 // ---------------------------------------------------------------------------
-// Self-updater: checks GitHub for a newer build when GD starts
+// Self-updater: checks GitHub for a newer build when GD starts (or when asked)
 // ---------------------------------------------------------------------------
 
 // Each GD version has its own release, so the updater never installs a build for the wrong GD version
@@ -831,63 +837,118 @@ static constexpr auto RELEASE_BASE = "https://github.com/pester33/List-Mod/relea
 #endif
 
 static async::TaskHolder<web::WebResponse> s_updateTask;
+static bool s_updateBusy = false;
+
+// Runs `fn` once a normal screen is showing (not mid scene-transition), so popups don't get lost
+static void whenScreenReady(std::function<void()> fn, int tries = 0) {
+    auto scene = CCDirector::sharedDirector()->getRunningScene();
+    bool ready = scene && !typeinfo_cast<CCTransitionScene*>(scene);
+    if (ready || tries > 600) {
+        fn();
+        return;
+    }
+    Loader::get()->queueInMainThread([fn = std::move(fn), tries]() mutable {
+        whenScreenReady(std::move(fn), tries + 1);
+    });
+}
 
 static void installUpdate(std::string version) {
+    if (s_updateBusy) return;
+    s_updateBusy = true;
+
+    auto url = fmt::format("{}{}.geode", RELEASE_BASE, Mod::get()->getID());
+    log::info("[updater] Downloading {} from {}", version, url);
     auto loading = Notification::create("Downloading GD Gaming List update...", NotificationIcon::Loading, 0.f);
     loading->show();
 
     web::WebRequest req;
-    req.timeout(std::chrono::seconds(60));
-    s_updateTask.spawn(
-        req.get(fmt::format("{}{}.geode", RELEASE_BASE, Mod::get()->getID())),
-        [loading = Ref(loading), version](web::WebResponse res) {
-            loading->hide();
-            auto const& data = res.data();
-            // A .geode file is a zip: must start with "PK"
-            if (!res.ok() || data.size() < 4 || data[0] != 'P' || data[1] != 'K') {
-                log::warn("Update download failed: HTTP {}", res.code());
-                Notification::create("Update failed to download", NotificationIcon::Error)->show();
-                return;
-            }
-            // Replace our own .geode file; Geode loads the new one on the next start
-            auto written = file::writeBinarySafe(Mod::get()->getPackagePath(), data);
-            if (!written) {
-                log::warn("Update install failed: {}", written.unwrapErr());
-                Notification::create("Update failed to install", NotificationIcon::Error)->show();
-                return;
-            }
+    req.timeout(std::chrono::seconds(90));
+    s_updateTask.spawn(req.get(url), [loading = Ref(loading), version](web::WebResponse res) {
+        s_updateBusy = false;
+        loading->hide();
+        auto const& data = res.data();
+        log::info("[updater] Download finished: HTTP {}, {} bytes", res.code(), data.size());
+        // A .geode file is a zip: must start with "PK"
+        if (!res.ok() || data.size() < 4 || data[0] != 'P' || data[1] != 'K') {
+            log::warn("[updater] Download failed or isn't a .geode file");
+            Notification::create(fmt::format("Update failed to download (HTTP {})", res.code()), NotificationIcon::Error, 3.f)->show();
+            return;
+        }
+        auto path = Mod::get()->getPackagePath();
+        auto written = file::writeBinarySafe(path, data);
+        if (!written) {
+            log::warn("[updater] Couldn't write the mod file: {}", written.unwrapErr());
+            Notification::create("Update failed to install", NotificationIcon::Error, 3.f)->show();
+            return;
+        }
+        log::info("[updater] Installed {}", version);
+        whenScreenReady([version] {
             createQuickPopup(
                 "Update installed",
-                fmt::format("GD Gaming List <cg>{}</c> is installed. Restart GD to use it.", version),
+                fmt::format("GD Gaming List <cg>{}</c> is installed.\nRestart GD to use it.", version),
                 "Later", "Restart",
                 [](auto, bool restart) {
                     if (restart) game::restart(true);
                 }
             );
-        }
-    );
+        });
+    });
 }
 
-static void checkForUpdate() {
-    web::WebRequest req;
-    req.timeout(std::chrono::seconds(15));
-    s_updateTask.spawn(req.get(fmt::format("{}version.txt", RELEASE_BASE)), [](web::WebResponse res) {
-        if (!res.ok()) return;
-        auto text = utils::string::trim(res.string().unwrapOr(""));
-        auto latest = VersionInfo::parse(text);
-        if (!latest) return;
-        auto current = Mod::get()->getVersion();
-        if (!(latest.unwrap() > current)) return;
+// manual = pressed the button (always tell the player the result);
+// automatic = on game start (stay quiet unless there's an update, retry once on failure)
+static void checkForUpdate(bool manual, bool isRetry) {
+    if (s_updateBusy) {
+        if (manual) Notification::create("Already checking for updates...", NotificationIcon::Info)->show();
+        return;
+    }
+    s_updateBusy = true;
 
-        auto version = latest.unwrap().toVString();
-        createQuickPopup(
-            "GD Gaming List",
-            fmt::format("A new version is out: <cg>{}</c> (you have {}).\nUpdate now?", version, current.toVString()),
-            "Later", "Update",
-            [version](auto, bool update) {
-                if (update) installUpdate(version);
+    auto url = fmt::format("{}version.txt", RELEASE_BASE);
+    log::info("[updater] Checking {} (current {}){}", url, Mod::get()->getVersion().toVString(), isRetry ? " - retry" : "");
+    if (manual) Notification::create("Checking for updates...", NotificationIcon::Loading, 1.f)->show();
+
+    web::WebRequest req;
+    req.timeout(std::chrono::seconds(20));
+    s_updateTask.spawn(req.get(url), [manual, isRetry](web::WebResponse res) {
+        s_updateBusy = false;
+        auto body = utils::string::trim(res.string().unwrapOr(""));
+        log::info("[updater] version.txt: HTTP {}, body '{}'", res.code(), body.substr(0, 40));
+
+        if (!res.ok()) {
+            if (!manual && !isRetry) {
+                log::info("[updater] Retrying once");
+                Loader::get()->queueInMainThread([] { checkForUpdate(false, true); });
+                return;
             }
-        );
+            if (manual) Notification::create(fmt::format("Couldn't check for updates (HTTP {})", res.code()), NotificationIcon::Error, 3.f)->show();
+            return;
+        }
+        auto latest = VersionInfo::parse(body);
+        if (!latest) {
+            log::warn("[updater] Couldn't read version '{}': {}", body.substr(0, 40), latest.unwrapErr());
+            if (manual) Notification::create("Couldn't read the latest version", NotificationIcon::Error, 3.f)->show();
+            return;
+        }
+        auto current = Mod::get()->getVersion();
+        auto version = latest.unwrap().toVString();
+        if (!(latest.unwrap() > current)) {
+            log::info("[updater] Up to date ({} >= {})", current.toVString(), version);
+            if (manual) Notification::create(fmt::format("You're up to date ({})", current.toVString()), NotificationIcon::Success, 2.f)->show();
+            return;
+        }
+
+        log::info("[updater] Update available: {} -> {}", current.toVString(), version);
+        whenScreenReady([version, current] {
+            createQuickPopup(
+                "GD Gaming List",
+                fmt::format("A new version is out: <cg>{}</c> (you have {}).\nUpdate now?", version, current.toVString()),
+                "Later", "Update",
+                [version](auto, bool update) {
+                    if (update) installUpdate(version);
+                }
+            );
+        });
     });
 }
 
@@ -895,9 +956,13 @@ class $modify(GdglMenuLayer, MenuLayer) {
     bool init() {
         if (!MenuLayer::init()) return false;
         static bool checked = false;
-        if (!checked && Mod::get()->getSettingValue<bool>("check-updates")) {
+        if (!checked) {
             checked = true;
-            checkForUpdate();
+            if (Mod::get()->getSettingValue<bool>("check-updates")) {
+                checkForUpdate(false, false);
+            } else {
+                log::info("[updater] Automatic update check is turned off in settings");
+            }
         }
         return true;
     }
