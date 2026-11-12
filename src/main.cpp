@@ -237,6 +237,26 @@ static CCNode* playSprite(float scale) {
     return btn;
 }
 
+// The GD Gaming List logo, scaled to `size` pixels wide (falls back to a gold "GL" badge)
+static CCNode* logoSprite(float size) {
+    if (auto spr = CCSprite::create("gdgl_logo.png"_spr)) {
+        spr->setScale(size / spr->getContentSize().width);
+        return spr;
+    }
+    auto node = CCNode::create();
+    node->setContentSize({ size, size });
+    node->setAnchorPoint({ 0.5f, 0.5f });
+    auto bg = panel({ size, size }, COL_GOLD);
+    bg->setPosition({ size / 2, size / 2 });
+    node->addChild(bg);
+    auto lbl = CCLabelBMFont::create("GL", "bigFont.fnt");
+    lbl->setScale(size / 66.f);
+    lbl->setColor(COL_DARK);
+    lbl->setPosition({ size / 2, size / 2 });
+    node->addChild(lbl);
+    return node;
+}
+
 static void openLevel(std::string const& id) {
     auto search = GJSearchObject::create(SearchType::Search, id);
     auto scene = LevelBrowserLayer::scene(search);
@@ -279,6 +299,9 @@ protected:
         headerLbl->setColor(COL_MUTED);
         headerLbl->setPosition({ W / 2, H - 21.f });
         m_mainLayer->addChild(headerLbl);
+        auto headerLogo = logoSprite(22.f);
+        headerLogo->setPosition({ W / 2 - 52.f, H - 21.f });
+        m_mainLayer->addChild(headerLogo);
 
         // Rank + name + section
         auto badge = rankBadge(lvl, 18.f);
@@ -444,14 +467,9 @@ protected:
         header->setPosition({ W / 2, H - 28.f });
         m_mainLayer->addChild(header);
 
-        auto logo = panel({ 30.f, 30.f }, COL_GOLD);
+        auto logo = logoSprite(36.f);
         logo->setPosition({ 48.f, H - 28.f });
         m_mainLayer->addChild(logo);
-        auto logoLbl = CCLabelBMFont::create("GL", "bigFont.fnt");
-        logoLbl->setScale(0.45f);
-        logoLbl->setColor(COL_DARK);
-        logoLbl->setPosition({ 48.f, H - 28.f });
-        m_mainLayer->addChild(logoLbl);
 
         auto title = CCLabelBMFont::create("GD Gaming List", "goldFont.fnt");
         title->setAnchorPoint({ 0.f, 0.5f });
@@ -863,8 +881,15 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
-        auto spr = ButtonSprite::create("GD Gaming List", "goldFont.fnt", "GJ_button_01.png", 0.8f);
-        spr->setScale(0.55f);
+        auto spr = CCNode::create();
+        spr->setContentSize({ 76.f, 60.f });
+        auto logo = logoSprite(42.f);
+        logo->setPosition({ 38.f, 37.f });
+        spr->addChild(logo);
+        auto label = CCLabelBMFont::create("GD Gaming List", "goldFont.fnt");
+        label->limitLabelWidth(76.f, 0.45f, 0.2f);
+        label->setPosition({ 38.f, 7.f });
+        spr->addChild(label);
         auto btn = CCMenuItemExt::createSpriteExtra(spr, [](CCMenuItemSpriteExtra*) {
             if (auto popup = GdglListPopup::create()) popup->show();
         });
@@ -875,7 +900,7 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
         menu->setPosition({ 0.f, 0.f });
         menu->addChild(btn);
         // Left side, a bit lower than the IPGDGLL List button so both mods fit together
-        btn->setPosition({ 52.f, winSize.height / 2.f - 52.f });
+        btn->setPosition({ 52.f, winSize.height / 2.f - 62.f });
         this->addChild(menu, 10);
 
         return true;

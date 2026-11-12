@@ -1,3 +1,6 @@
+# v1.4.0
+- Added the GD Gaming List logo: mod icon, list header, level details and the Search screen button
+
 # v1.3.3
 - When an update is out, a green Update button now also shows in the list header (besides the popup when GD starts)
 
