@@ -1,3 +1,6 @@
+# v1.5.1
+- Fixed the GDGL badge only showing the first time you opened a level
+
 # v1.5.0
 - GDGL badge: levels on the list show their rank (like "#12 GD Gaming List") on their level page. Tap it for details
 

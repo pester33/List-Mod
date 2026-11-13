@@ -993,8 +993,10 @@ class $modify(GdglLevelInfoLayer, LevelInfoLayer) {
 
         auto self = WeakRef<LevelInfoLayer>(this);
         withBadgeLevels([self, id] {
+            // may run right away (list cached) while the page is still being built: that's fine,
+            // we only need the page to still exist
             auto layer = self.lock();
-            if (!layer || !layer->getParent()) return;
+            if (!layer) return;
             auto idStr = std::to_string(id);
             auto it = std::find_if(s_badgeLevels.begin(), s_badgeLevels.end(), [&](auto const& l) { return l.levelID == idStr; });
             if (it == s_badgeLevels.end()) return;
