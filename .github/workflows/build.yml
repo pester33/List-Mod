@@ -31,6 +31,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Geode downloads the newest GD bindings by default; pin a known-good version so
+      # upstream changes can't break our builds (bump BINDINGS_COMMIT to update).
+      - name: Use pinned GD bindings
+        shell: bash
+        env:
+          BINDINGS_COMMIT: 0b1cd55
+        run: |
+          git clone -q --filter=blob:none https://github.com/geode-sdk/bindings "$RUNNER_TEMP/bindings"
+          git -C "$RUNNER_TEMP/bindings" checkout -q "$BINDINGS_COMMIT"
+          echo "GEODE_BINDINGS_REPO_PATH=$RUNNER_TEMP/bindings" >> "$GITHUB_ENV"
+
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
