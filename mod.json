@@ -6,7 +6,7 @@
 	},
 	"id": "pester.gdgl-list",
 	"name": "GD Gaming List",
-	"version": "v1.4.1",
+	"version": "v1.5.0",
 	"developer": "Pester",
 	"description": "Official GD Gaming List mod: browse the list right inside GD, from a button on the Search screen.",
 	"tags": [
@@ -14,6 +14,12 @@
 		"interface"
 	],
 	"settings": {
+		"level-badge": {
+			"type": "bool",
+			"name": "GDGL Badge on Levels",
+			"description": "Show a GDGL rank badge on the page of levels that are on the list. Tap it for the level's details.",
+			"default": true
+		},
 		"check-updates": {
 			"type": "bool",
 			"name": "Check for Updates",

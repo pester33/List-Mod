@@ -1,6 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/LevelSearchLayer.hpp>
 #include <Geode/modify/MenuLayer.hpp>
+#include <Geode/modify/LevelInfoLayer.hpp>
 #include <Geode/ui/TextInput.hpp>
 #include <Geode/ui/LazySprite.hpp>
 #include <Geode/ui/BasedButtonSprite.hpp>
@@ -931,6 +932,134 @@ class $modify(GdglSearchLayer, LevelSearchLayer) {
     }
 };
 
+
+// ---------------------------------------------------------------------------
+// GDGL badge on level pages ("GDGL #12" next to the level when it's on the list)
+// ---------------------------------------------------------------------------
+
+// Shared copy of the list for badges (refreshed at most every 10 minutes)
+static std::vector<ListLevel> s_badgeLevels;
+static std::chrono::steady_clock::time_point s_badgeLoadedAt;
+static bool s_badgeLoaded = false;
+static bool s_badgeLoading = false;
+static std::vector<std::function<void()>> s_badgeWaiting;
+static async::TaskHolder<web::WebResponse> s_badgeTask;
+
+static void badgeLoadDone(std::optional<std::vector<ListLevel>> levels) {
+    s_badgeLoading = false;
+    if (levels) {
+        s_badgeLevels = std::move(*levels);
+        s_badgeLoaded = true;
+        s_badgeLoadedAt = std::chrono::steady_clock::now();
+    }
+    auto waiting = std::move(s_badgeWaiting);
+    s_badgeWaiting.clear();
+    for (auto& fn : waiting) fn();
+}
+
+static void withBadgeLevels(std::function<void()> fn) {
+    bool fresh = s_badgeLoaded && std::chrono::steady_clock::now() - s_badgeLoadedAt < std::chrono::minutes(10);
+    if (fresh) return fn();
+    s_badgeWaiting.push_back(std::move(fn));
+    if (s_badgeLoading) return;
+    s_badgeLoading = true;
+
+    web::WebRequest req;
+    req.timeout(std::chrono::seconds(15));
+    req.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDGamingListMod/1.5");
+    s_badgeTask.spawn(req.get(DATA_PAGE), [](web::WebResponse res) {
+        if (res.ok()) {
+            if (auto parsed = parseListPage(res.string().unwrapOr(""))) return badgeLoadDone(std::move(parsed).unwrap());
+        }
+        // site failed: use the GitHub backup
+        web::WebRequest backup;
+        backup.timeout(std::chrono::seconds(15));
+        s_badgeTask.spawn(backup.get(MIRROR_URL), [](web::WebResponse res) {
+            if (res.ok()) {
+                if (auto parsed = parseLevels(res.string().unwrapOr(""))) return badgeLoadDone(std::move(parsed).unwrap());
+            }
+            log::warn("[badge] Couldn't load the list for badges");
+            badgeLoadDone(std::nullopt);
+        });
+    });
+}
+
+class $modify(GdglLevelInfoLayer, LevelInfoLayer) {
+    bool init(GJGameLevel* level, bool challenge) {
+        if (!LevelInfoLayer::init(level, challenge)) return false;
+        if (!Mod::get()->getSettingValue<bool>("level-badge") || !level) return true;
+        int id = level->m_levelID.value();
+        if (id <= 0) return true;
+
+        auto self = WeakRef<LevelInfoLayer>(this);
+        withBadgeLevels([self, id] {
+            auto layer = self.lock();
+            if (!layer || !layer->getParent()) return;
+            auto idStr = std::to_string(id);
+            auto it = std::find_if(s_badgeLevels.begin(), s_badgeLevels.end(), [&](auto const& l) { return l.levelID == idStr; });
+            if (it == s_badgeLevels.end()) return;
+            static_cast<GdglLevelInfoLayer*>(layer.data())->addBadge(*it);
+        });
+        return true;
+    }
+
+    void addBadge(ListLevel const& lvl) {
+        if (this->getChildByID("gdgl-badge-menu"_spr)) return;
+        bool ext = lvl.bucket != "main";
+
+        // logo + "GDGL #12" on a dark pill
+        auto spr = CCNode::create();
+        spr->setContentSize({ 112.f, 34.f });
+        auto bg = panel({ 112.f, 34.f }, ext ? COL_EXT : COL_DARK, 220);
+        bg->setPosition({ 56.f, 17.f });
+        spr->addChild(bg);
+
+        CCNode* icon = nullptr;
+        if (!ext && lvl.position == 1) {
+            if (auto trophy = CCSprite::create("gdgl_trophy.png"_spr)) {
+                trophy->setScale(26.f / trophy->getContentSize().width);
+                icon = trophy;
+            }
+        }
+        if (!icon) icon = logoSprite(26.f);
+        icon->setPosition({ 18.f, 17.f });
+        spr->addChild(icon);
+
+        auto rank = CCLabelBMFont::create(fmt::format("#{}", lvl.position).c_str(), "goldFont.fnt");
+        rank->setAnchorPoint({ 0.f, 0.5f });
+        rank->limitLabelWidth(72.f, 0.7f, 0.3f);
+        ccColor3B rankColor = { 255, 255, 255 };
+        if (!ext && lvl.position == 2) rankColor = COL_SILVER;
+        if (!ext && lvl.position == 3) rankColor = COL_BRONZE;
+        rank->setColor(rankColor);
+        rank->setPosition({ 36.f, 21.f });
+        spr->addChild(rank);
+
+        auto section = CCLabelBMFont::create(ext ? "GDGL Extended" : "GD Gaming List", "chatFont.fnt");
+        section->setAnchorPoint({ 0.f, 0.5f });
+        section->limitLabelWidth(72.f, 0.5f, 0.2f);
+        section->setColor(COL_MUTED);
+        section->setPosition({ 37.f, 8.f });
+        spr->addChild(section);
+
+        // tap the badge to see the level's list details
+        auto copy = lvl;
+        auto btn = CCMenuItemExt::createSpriteExtra(spr, [copy](CCMenuItemSpriteExtra*) {
+            if (auto popup = GdglLevelPopup::create(copy, nullptr)) popup->show();
+        });
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
+        auto menu = CCMenu::create();
+        menu->setID("gdgl-badge-menu"_spr);
+        menu->setPosition({ 0.f, 0.f });
+        btn->setPosition({ 72.f, winSize.height - 72.f });
+        menu->addChild(btn);
+        this->addChild(menu, 20);
+
+        // small pop-in animation
+        btn->setScale(0.f);
+        btn->runAction(CCEaseBackOut::create(CCScaleTo::create(0.3f, 1.f)));
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Self-updater: checks GitHub for a newer build when GD starts (or when asked)

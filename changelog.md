@@ -1,3 +1,6 @@
+# v1.5.0
+- GDGL badge: levels on the list show their rank (like "#12 GD Gaming List") on their level page. Tap it for details
+
 # v1.4.1
 - Trophy for the #1 level
 - New fire-eyes icon on the Random button
