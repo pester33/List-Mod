@@ -1,3 +1,6 @@
+# v1.5.3
+- Fixed the list showing outside the popup on Geode 6
+
 # v1.5.2
 - GD 2.2091 version now uses the official Geode 6.0.0 (was the alpha)
 

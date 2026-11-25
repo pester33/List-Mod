@@ -547,6 +547,12 @@ protected:
         m_mainLayer->addChild(listBg);
 
         m_list = ScrollLayer::create({ LIST_W, LIST_H });
+
+        // Geode 6 centers scroll layers on their position; pin the bottom-left corner like Geode 5 does
+
+        m_list->ignoreAnchorPointForPosition(false);
+
+        m_list->setAnchorPoint({ 0.f, 0.f });
         m_list->setPosition({ W / 2 - LIST_W / 2, LIST_BOTTOM });
         m_list->m_contentLayer->setLayout(ScrollLayer::createDefaultListLayout(4.f));
         m_mainLayer->addChild(m_list);
