@@ -11,6 +11,15 @@
 
 using namespace geode::prelude;
 
+// Geode 6 (GD 2.2091) and Geode 5 (GD 2.2081) take different time types for timeouts
+static void setTimeout(web::WebRequest& req, int secs) {
+#if GEODE_COMP_GD_VERSION >= 22091
+    req.timeout(asp::Duration::fromSecs(secs));
+#else
+    req.timeout(std::chrono::seconds(secs));
+#endif
+}
+
 // The list site embeds its full level list as JSON on the Roulette page:
 // <script id="roulette-data" type="application/json">[ ... ]</script>
 static constexpr auto LIST_SITE = "http://gdgl.x10.mx/gdgaminglist/";
@@ -592,7 +601,7 @@ protected:
         }
         // The check on game start hasn't finished (or failed): ask GitHub quietly
         web::WebRequest req;
-        req.timeout(std::chrono::seconds(20));
+        setTimeout(req, 20);
         m_updateCheck.spawn(req.get(fmt::format("{}version.txt", RELEASE_BASE)), [this](web::WebResponse res) {
             if (!res.ok()) {
                 log::info("[updater] Popup check failed: HTTP {}", res.code());
@@ -653,7 +662,7 @@ protected:
     // 1) Try the website itself
     void load() {
         web::WebRequest req;
-        req.timeout(std::chrono::seconds(15));
+        setTimeout(req, 15);
         req.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDGamingListMod/1.3");
 
         m_task.spawn(req.get(DATA_PAGE), [this](web::WebResponse res) {
@@ -671,7 +680,7 @@ protected:
     // 2) Fall back to the copy on GitHub
     void loadMirror() {
         web::WebRequest req;
-        req.timeout(std::chrono::seconds(15));
+        setTimeout(req, 15);
 
         m_task.spawn(req.get(MIRROR_URL), [this](web::WebResponse res) {
             if (!res.ok()) {
@@ -965,7 +974,7 @@ static void withBadgeLevels(std::function<void()> fn) {
     s_badgeLoading = true;
 
     web::WebRequest req;
-    req.timeout(std::chrono::seconds(15));
+    setTimeout(req, 15);
     req.userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDGamingListMod/1.5");
     s_badgeTask.spawn(req.get(DATA_PAGE), [](web::WebResponse res) {
         if (res.ok()) {
@@ -973,7 +982,7 @@ static void withBadgeLevels(std::function<void()> fn) {
         }
         // site failed: use the GitHub backup
         web::WebRequest backup;
-        backup.timeout(std::chrono::seconds(15));
+        setTimeout(backup, 15);
         s_badgeTask.spawn(backup.get(MIRROR_URL), [](web::WebResponse res) {
             if (res.ok()) {
                 if (auto parsed = parseLevels(res.string().unwrapOr(""))) return badgeLoadDone(std::move(parsed).unwrap());
@@ -1099,7 +1108,7 @@ static void installUpdate(std::string version) {
     loading->show();
 
     web::WebRequest req;
-    req.timeout(std::chrono::seconds(90));
+    setTimeout(req, 90);
     s_updateTask.spawn(req.get(url), [loading = Ref(loading), version](web::WebResponse res) {
         s_updateBusy = false;
         loading->hide();
@@ -1147,7 +1156,7 @@ static void checkForUpdate(bool manual, bool isRetry) {
     if (manual) Notification::create("Checking for updates...", NotificationIcon::Loading, 1.f)->show();
 
     web::WebRequest req;
-    req.timeout(std::chrono::seconds(20));
+    setTimeout(req, 20);
     s_updateTask.spawn(req.get(url), [manual, isRetry](web::WebResponse res) {
         s_updateBusy = false;
         auto body = utils::string::trim(res.string().unwrapOr(""));

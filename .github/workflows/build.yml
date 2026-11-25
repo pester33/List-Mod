@@ -36,7 +36,7 @@ jobs:
       - name: Use pinned GD bindings
         shell: bash
         env:
-          BINDINGS_COMMIT: 0b1cd55
+          BINDINGS_COMMIT: b1d811b
         run: |
           git clone -q --filter=blob:none https://github.com/geode-sdk/bindings "$RUNNER_TEMP/bindings"
           git -C "$RUNNER_TEMP/bindings" checkout -q "$BINDINGS_COMMIT"

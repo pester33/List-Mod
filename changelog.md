@@ -1,3 +1,6 @@
+# v1.5.2
+- GD 2.2091 version now uses the official Geode 6.0.0 (was the alpha)
+
 # v1.5.1
 - Fixed the GDGL badge only showing the first time you opened a level
 
