@@ -25,8 +25,15 @@ jobs:
           os: ubuntu-latest
           target: Android64
 
+        - name: iOS
+          os: macos-latest
+          target: iOS
+          optional: true
+
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
+    # a failed iOS build shouldn't stop the PC / Android release
+    continue-on-error: ${{ matrix.config.optional == true }}
 
     steps:
       - uses: actions/checkout@v4

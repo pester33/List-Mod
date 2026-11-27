@@ -1,3 +1,6 @@
+# v1.5.4
+- iOS support (GD 2.2091)
+
 # v1.5.3
 - Fixed the list showing outside the popup on Geode 6
 
